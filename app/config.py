@@ -22,6 +22,8 @@ LANGSMITH_CREDENTIAL_ENV_VARS = (
     "LANGSMITH_PROJECT",
 )
 
+MAX_REQUEST_BODY_BYTES = 4096
+
 
 def enforce_privacy_environment() -> None:
     """Force tracing off and strip any LangSmith configuration from environment."""
@@ -46,7 +48,21 @@ class Settings(BaseSettings):
     app_name: str = Field(default="JLPT Practice & Tutor API", alias="APP_NAME")
     gemini_api_key: SecretStr = Field(default=SecretStr(""), alias="GEMINI_API_KEY")
     gemini_model: str = Field(default="gemini-3.1-flash-lite", alias="GEMINI_MODEL")
-    gemini_temperature: float = Field(default=0.4, alias="GEMINI_TEMPERATURE")
+    gemini_temperature: float = Field(
+        default=0.4, ge=0.0, le=2.0, alias="GEMINI_TEMPERATURE"
+    )
+    gemini_max_output_tokens: int = Field(
+        default=2048, ge=256, le=4096, alias="GEMINI_MAX_OUTPUT_TOKENS"
+    )
+    gemini_timeout_seconds: float = Field(
+        default=30.0, ge=1.0, le=60.0, alias="GEMINI_TIMEOUT_SECONDS"
+    )
+    gemini_max_retries: int = Field(
+        default=2, ge=0, le=3, alias="GEMINI_MAX_RETRIES"
+    )
+    max_request_body_bytes: int = Field(
+        default=MAX_REQUEST_BODY_BYTES, ge=512, le=16384, alias="MAX_REQUEST_BODY_BYTES"
+    )
 
     def model_post_init(self, __context: object) -> None:
         """Re-enforce tracing disabled even if .env attempted to enable it."""

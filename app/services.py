@@ -1,18 +1,23 @@
 """Stateless AI services using langchain-google-genai.
 
 Privacy guarantees:
-- No prompts, answers, conversation content, or API keys are ever logged.
+- No prompts, answers, generated questions, conversation content, or API keys are ever logged or stored.
 - No database, files, or persistent memory are used.
-- Conversation context exists strictly in request-local scope during execution.
+- Conversation context and generated batches exist strictly in request-local scope during execution.
 - No Gemini client instantiation or network call occurs at import, startup, or health check time.
 """
 
+import asyncio
+from typing import Any
+from fastapi import Depends
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
+from pydantic import ValidationError
 
 from app.config import Settings, enforce_privacy_environment, get_settings
 from app.prompts import (
     ANSWER_EVALUATION_PROMPT,
+    PRACTICE_BATCH_GENERATE_PROMPT,
     PRACTICE_QUESTION_PROMPT,
     TUTOR_CHAT_PROMPT,
 )
@@ -20,10 +25,15 @@ from app.schemas import (
     AnswerEvaluationRequest,
     AnswerEvaluationResponse,
     ChatMessage,
+    GeneratedPracticeQuestion,
+    LLMPracticeBatchOutput,
+    PracticeGenerateRequest,
+    PracticeGenerateResponse,
     PracticeQuestionRequest,
     PracticeQuestionResponse,
     TutorChatRequest,
     TutorChatResponse,
+    compute_stable_question_id,
 )
 
 
@@ -31,8 +41,17 @@ class MissingCredentialsError(RuntimeError):
     """Raised when GEMINI_API_KEY is not configured on the backend."""
 
 
+class StructuralValidationError(ValueError):
+    """Raised when AI output fails deterministic structural validation.
+
+    Distinct from linguistic correctness: structural validation verifies schema
+    conformance, batch count, Japanese script presence, 4 distinct options,
+    valid answer index (0-3), and 4 non-empty option explanations.
+    """
+
+
 def create_chat_model(settings: Settings | None = None) -> ChatGoogleGenerativeAI:
-    """Instantiate ChatGoogleGenerativeAI lazily for a single request.
+    """Instantiate ChatGoogleGenerativeAI lazily for a single request with bounded parameters.
 
     Never called during application startup or /health checks.
     """
@@ -48,7 +67,15 @@ def create_chat_model(settings: Settings | None = None) -> ChatGoogleGenerativeA
         model=cfg.gemini_model,
         google_api_key=api_key,
         temperature=cfg.gemini_temperature,
+        max_output_tokens=cfg.gemini_max_output_tokens,
+        timeout=cfg.gemini_timeout_seconds,
+        max_retries=cfg.gemini_max_retries,
     )
+
+
+def get_chat_model(settings: Settings = Depends(get_settings)) -> Any:
+    """FastAPI dependency providing the chat model (overridable in tests with a fake model)."""
+    return create_chat_model(settings)
 
 
 def _build_request_local_history(history: list[ChatMessage]) -> list[BaseMessage]:
@@ -62,11 +89,103 @@ def _build_request_local_history(history: list[ChatMessage]) -> list[BaseMessage
     return local_messages
 
 
+async def generate_practice_batch(
+    payload: PracticeGenerateRequest,
+    chat_model: Any = None,
+    settings: Settings | None = None,
+) -> PracticeGenerateResponse:
+    """Generate 1 to 5 JLPT vocabulary/grammar practice questions in a single async LangChain call.
+
+    Uses Pydantic structured output, enforces timeout and structural validation,
+    assigns deterministic stable IDs, and labels all material as AI-generated.
+    Never logs or persists requests or generated questions.
+    """
+    enforce_privacy_environment()
+    cfg = settings or get_settings()
+    llm = chat_model if chat_model is not None else create_chat_model(cfg)
+
+    if hasattr(llm, "with_structured_output"):
+        structured_llm = llm.with_structured_output(LLMPracticeBatchOutput)
+    else:
+        structured_llm = llm
+
+    chain = PRACTICE_BATCH_GENERATE_PROMPT | structured_llm
+
+    # Single async generation call per batch, bounded by configured timeout
+    raw_batch = await asyncio.wait_for(
+        chain.ainvoke(
+            {
+                "level": payload.level.value,
+                "category": payload.category.value,
+                "question_count": payload.question_count,
+                "explanation_language": payload.explanation_language.value,
+            }
+        ),
+        timeout=cfg.gemini_timeout_seconds,
+    )
+
+    try:
+        if isinstance(raw_batch, LLMPracticeBatchOutput):
+            parsed_batch = raw_batch
+        elif isinstance(raw_batch, AIMessage) and isinstance(raw_batch.content, str):
+            parsed_batch = LLMPracticeBatchOutput.model_validate_json(raw_batch.content)
+        elif isinstance(raw_batch, str):
+            parsed_batch = LLMPracticeBatchOutput.model_validate_json(raw_batch)
+        else:
+            parsed_batch = LLMPracticeBatchOutput.model_validate(raw_batch)
+    except ValidationError as exc:
+        raise StructuralValidationError(
+            "Model output failed structural schema validation."
+        ) from exc
+
+    if len(parsed_batch.questions) != payload.question_count:
+        raise StructuralValidationError(
+            f"Structural validation failed: requested {payload.question_count} question(s), "
+            f"but model returned {len(parsed_batch.questions)}."
+        )
+
+    try:
+        questions: list[GeneratedPracticeQuestion] = []
+        for item in parsed_batch.questions:
+            if not (0 <= item.correct_index < len(item.options)):
+                raise StructuralValidationError(
+                    "Structural validation failed: correct_index out of range."
+                )
+            stable_id = compute_stable_question_id(
+                level=payload.level.value,
+                category=payload.category.value,
+                question_text=item.question_text,
+                options=item.options,
+            )
+            questions.append(
+                GeneratedPracticeQuestion(
+                    id=stable_id,
+                    question_text=item.question_text,
+                    options=item.options,
+                    correct_index=item.correct_index,
+                    correct_answer=item.options[item.correct_index],
+                    option_explanations=item.option_explanations,
+                )
+            )
+
+        return PracticeGenerateResponse(
+            level=payload.level,
+            category=payload.category,
+            question_count=payload.question_count,
+            explanation_language=payload.explanation_language,
+            questions=questions,
+        )
+    except ValidationError as exc:
+        raise StructuralValidationError(
+            "Generated questions failed structural validation."
+        ) from exc
+
+
 async def generate_practice_question(
     payload: PracticeQuestionRequest,
     settings: Settings | None = None,
 ) -> PracticeQuestionResponse:
-    """Generate a structured JLPT practice question without logging or persistence."""
+    """Generate a single structured JLPT practice question without logging or persistence."""
     llm = create_chat_model(settings)
     structured_llm = llm.with_structured_output(PracticeQuestionResponse)
     chain = PRACTICE_QUESTION_PROMPT | structured_llm

@@ -1,6 +1,8 @@
-"""FastAPI routes for health checks, JLPT practice, tutor chat, and in-memory browser UI."""
+"""FastAPI routes for health checks, JLPT practice generation, evaluation, tutor chat, and UI."""
 
+import asyncio
 import os
+from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.responses import HTMLResponse
 
@@ -9,6 +11,8 @@ from app.schemas import (
     AnswerEvaluationRequest,
     AnswerEvaluationResponse,
     HealthResponse,
+    PracticeGenerateRequest,
+    PracticeGenerateResponse,
     PracticeQuestionRequest,
     PracticeQuestionResponse,
     TutorChatRequest,
@@ -16,8 +20,11 @@ from app.schemas import (
 )
 from app.services import (
     MissingCredentialsError,
+    StructuralValidationError,
     evaluate_practice_answer,
+    generate_practice_batch,
     generate_practice_question,
+    get_chat_model,
     run_tutor_chat,
 )
 
@@ -49,6 +56,58 @@ async def health_check(
 
 
 @router.post(
+    "/api/practice/generate",
+    response_model=PracticeGenerateResponse,
+    tags=["practice"],
+)
+@router.post(
+    "/practice/generate",
+    response_model=PracticeGenerateResponse,
+    tags=["practice"],
+    include_in_schema=False,
+)
+async def generate_practice_questions(
+    payload: PracticeGenerateRequest,
+    response: Response,
+    chat_model: Any = Depends(get_chat_model),
+    settings: Settings = Depends(get_settings),
+) -> PracticeGenerateResponse:
+    """Generate 1-5 AI-labeled JLPT vocabulary or grammar questions in one batch call."""
+    apply_no_store_headers(response)
+    try:
+        return await generate_practice_batch(
+            payload=payload,
+            chat_model=chat_model,
+            settings=settings,
+        )
+    except MissingCredentialsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+            headers={"Cache-Control": "no-store"},
+        ) from None
+    except StructuralValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+            headers={"Cache-Control": "no-store"},
+        ) from None
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Practice question generation timed out.",
+            headers={"Cache-Control": "no-store"},
+        ) from None
+    except Exception:
+        # Never log prompts, answers, or exception details containing user content
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to generate practice questions from upstream model.",
+            headers={"Cache-Control": "no-store"},
+        ) from None
+
+
+@router.post(
     "/practice/question",
     response_model=PracticeQuestionResponse,
     tags=["practice"],
@@ -74,7 +133,6 @@ async def create_practice_question(
             headers={"Cache-Control": "no-store"},
         ) from None
     except Exception:
-        # Never log prompts, answers, or exception details containing user content
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to generate practice question from upstream model.",
@@ -170,7 +228,7 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
   <p>Conversation context is kept strictly in JavaScript runtime memory (never in localStorage, sessionStorage, cookies, or backend storage) and cleared on page reload.</p>
 
   <div class="card">
-    <h2>1. JLPT Practice Question</h2>
+    <h2>1. JLPT Practice Batch Generator (AI-Generated)</h2>
     <div class="row">
       <select id="level">
         <option value="N5">JLPT N5</option>
@@ -182,11 +240,20 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
       <select id="category">
         <option value="grammar">Grammar</option>
         <option value="vocabulary">Vocabulary</option>
-        <option value="kanji">Kanji</option>
-        <option value="reading">Reading</option>
       </select>
-      <input id="topic" type="text" placeholder="Optional topic (e.g., particles)" />
-      <button type="button" onclick="generateQuestion()">Generate Question</button>
+      <select id="question_count">
+        <option value="1">1 Question</option>
+        <option value="2">2 Questions</option>
+        <option value="3">3 Questions</option>
+        <option value="4">4 Questions</option>
+        <option value="5">5 Questions</option>
+      </select>
+      <select id="explanation_language">
+        <option value="English">English</option>
+        <option value="Korean">Korean</option>
+        <option value="Japanese">Japanese</option>
+      </select>
+      <button type="button" onclick="generateQuestion()">Generate Batch</button>
     </div>
     <pre id="practice-output" style="white-space: pre-wrap;"></pre>
   </div>
@@ -208,14 +275,15 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
     async function generateQuestion() {
       const level = document.getElementById('level').value;
       const category = document.getElementById('category').value;
-      const topic = document.getElementById('topic').value || null;
+      const question_count = parseInt(document.getElementById('question_count').value, 10);
+      const explanation_language = document.getElementById('explanation_language').value;
       const out = document.getElementById('practice-output');
       out.textContent = 'Generating...';
-      const res = await fetch('/api/practice/question', {
+      const res = await fetch('/api/practice/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         cache: 'no-store',
-        body: JSON.stringify({ level, category, topic })
+        body: JSON.stringify({ level, category, question_count, explanation_language })
       });
       const data = await res.json();
       out.textContent = JSON.stringify(data, null, 2);

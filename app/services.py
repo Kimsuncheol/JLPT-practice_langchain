@@ -1,17 +1,20 @@
 """Stateless AI services using langchain-google-genai and local multiple-choice grading.
 
 Privacy & self-study guarantees:
-- No prompts, answers, generated questions, explanations, scores, conversation content,
-  or API keys are ever logged or stored.
+- No prompts, answers, generated questions, passages, explanations, scores, conversation
+  content, or API keys are ever logged or stored.
 - No database, checkpoints, files, or persistent memory are used.
 - Ordinary multiple-choice grading is performed deterministically against the answer key
   without calling Gemini.
+- Difficulty is labeled as approximate and all material as unofficial AI practice; practice
+  accuracy never claims to predict an official JLPT score.
 - Tutor instructions are strictly server-controlled; submitted question context and recent
   messages are treated purely as untrusted data in request-local scope.
 - No Gemini client instantiation or network call occurs at import, startup, or health check time.
 """
 
 import asyncio
+import re
 from typing import Any
 from fastapi import Depends
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -25,12 +28,17 @@ from app.prompts import (
     TUTOR_ITEM_PROMPT,
 )
 from app.schemas import (
+    JAPANESE_SCRIPT_PATTERN,
+    MAX_READING_PASSAGE_CHARS,
+    MAX_READING_QUESTIONS,
     MAX_TUTOR_HISTORY_MESSAGES,
     AlternativeExplanation,
     AnswerEvaluationRequest,
     AnswerEvaluationResponse,
     ChatMessage,
     GeneratedPracticeQuestion,
+    GenerationCategory,
+    LLMGeneratedQuestionItem,
     LLMPracticeBatchOutput,
     PracticeGenerateRequest,
     PracticeGenerateResponse,
@@ -53,8 +61,9 @@ class StructuralValidationError(ValueError):
     """Raised when AI output fails deterministic structural validation.
 
     Distinct from linguistic correctness: structural validation verifies schema
-    conformance, batch count, Japanese script presence, 4 distinct options,
-    valid answer index (0-3), and 4 non-empty option explanations.
+    conformance, batch count, Japanese script presence, reading passage bounds,
+    supporting sentence presence, 4 distinct options, valid answer index (0-3),
+    and 4 non-empty option explanations.
     """
 
 
@@ -115,7 +124,10 @@ def _format_selected_question_data(
     if question is None:
         return "No specific practice question selected."
 
-    lines = [f"Question Text: {question.question_text}"]
+    lines: list[str] = []
+    if question.passage:
+        lines.append(f"Reading Passage: {question.passage}")
+    lines.append(f"Question Text: {question.question_text}")
     if question.options:
         formatted_opts = ", ".join(
             f"{idx + 1}. {opt}" for idx, opt in enumerate(question.options)
@@ -130,6 +142,8 @@ def _format_selected_question_data(
         lines.append(f"Correct Answer: {question.options[question.correct_index]}")
     if question.selected_answer:
         lines.append(f"Learner Selected Answer: {question.selected_answer}")
+    if question.supporting_sentence:
+        lines.append(f"Supporting Sentence: {question.supporting_sentence}")
     if question.option_explanations:
         exp_str = " | ".join(
             f"Option {idx + 1}: {exp}"
@@ -139,16 +153,58 @@ def _format_selected_question_data(
     return "\n".join(lines)
 
 
+def _resolve_reading_supporting_sentence(
+    passage: str, item: LLMGeneratedQuestionItem
+) -> tuple[str, list[str]]:
+    """Validate and ensure the supporting sentence from the passage is in each explanation."""
+    candidate = (item.supporting_sentence or "").strip()
+
+    if not candidate:
+        # Try to find a passage sentence already quoted inside option_explanations
+        passage_sentences = [
+            s.strip()
+            for s in re.split(r"[。！？\n]+", passage)
+            if s.strip() and JAPANESE_SCRIPT_PATTERN.search(s)
+        ]
+        for sent in passage_sentences:
+            if any(sent in exp for exp in item.option_explanations):
+                candidate = sent
+                break
+
+    if not candidate or not JAPANESE_SCRIPT_PATTERN.search(candidate):
+        raise StructuralValidationError(
+            "Structural validation failed: reading question is missing a Japanese supporting_sentence."
+        )
+
+    normalized_candidate = candidate.rstrip("。！？ ")
+    if normalized_candidate not in passage and candidate not in passage:
+        raise StructuralValidationError(
+            "Structural validation failed: supporting_sentence must come from the reading passage."
+        )
+
+    enriched_explanations: list[str] = []
+    for exp in item.option_explanations:
+        if candidate in exp or normalized_candidate in exp:
+            if candidate not in exp:
+                enriched_explanations.append(f"{exp} (Supporting sentence: 「{candidate}」)")
+            else:
+                enriched_explanations.append(exp)
+        else:
+            enriched_explanations.append(f"{exp} (Supporting sentence: 「{candidate}」)")
+
+    return candidate, enriched_explanations
+
+
 async def generate_practice_batch(
     payload: PracticeGenerateRequest,
     chat_model: Any = None,
     settings: Settings | None = None,
 ) -> PracticeGenerateResponse:
-    """Generate 1 to 5 JLPT vocabulary/grammar practice questions in a single async LangChain call.
+    """Generate JLPT vocabulary, grammar, or reading practice items in a single async LangChain call.
 
     Uses Pydantic structured output, enforces timeout and structural validation,
-    assigns deterministic stable IDs, and labels all material as AI-generated.
-    Never logs or persists requests or generated questions.
+    assigns deterministic stable IDs, and labels all material as unofficial AI practice
+    with approximate difficulty. Never logs or persists requests or generated questions.
     """
     enforce_privacy_environment()
     cfg = settings or get_settings()
@@ -194,6 +250,26 @@ async def generate_practice_batch(
             f"but model returned {len(parsed_batch.questions)}."
         )
 
+    is_reading = payload.category == GenerationCategory.READING
+    passage_text: str | None = None
+
+    if is_reading:
+        if payload.question_count > MAX_READING_QUESTIONS:
+            raise StructuralValidationError(
+                f"Structural validation failed: reading category supports at most {MAX_READING_QUESTIONS} questions."
+            )
+        if not parsed_batch.passage or not JAPANESE_SCRIPT_PATTERN.search(
+            parsed_batch.passage
+        ):
+            raise StructuralValidationError(
+                "Structural validation failed: reading category requires a non-empty Japanese passage."
+            )
+        if len(parsed_batch.passage) > MAX_READING_PASSAGE_CHARS:
+            raise StructuralValidationError(
+                f"Structural validation failed: reading passage exceeds {MAX_READING_PASSAGE_CHARS} characters."
+            )
+        passage_text = parsed_batch.passage
+
     try:
         questions: list[GeneratedPracticeQuestion] = []
         for item in parsed_batch.questions:
@@ -201,6 +277,15 @@ async def generate_practice_batch(
                 raise StructuralValidationError(
                     "Structural validation failed: correct_index out of range."
                 )
+
+            supporting_sentence: str | None = None
+            option_explanations = item.option_explanations
+
+            if is_reading and passage_text is not None:
+                supporting_sentence, option_explanations = (
+                    _resolve_reading_supporting_sentence(passage_text, item)
+                )
+
             stable_id = compute_stable_question_id(
                 level=payload.level.value,
                 category=payload.category.value,
@@ -214,7 +299,8 @@ async def generate_practice_batch(
                     options=item.options,
                     correct_index=item.correct_index,
                     correct_answer=item.options[item.correct_index],
-                    option_explanations=item.option_explanations,
+                    option_explanations=option_explanations,
+                    supporting_sentence=supporting_sentence,
                 )
             )
 
@@ -223,6 +309,7 @@ async def generate_practice_batch(
             category=payload.category,
             question_count=payload.question_count,
             explanation_language=payload.explanation_language,
+            passage=passage_text,
             questions=questions,
         )
     except ValidationError as exc:
@@ -320,6 +407,7 @@ async def evaluate_practice_answer(
         is_correct=is_correct,
         selected_answer=selected,
         correct_answer=resolved_correct_answer,
+        supporting_sentence=payload.supporting_sentence,
         why_correct_fits=why_correct_fits,
         why_alternatives_do_not_fit=alternatives,
         feedback=feedback,

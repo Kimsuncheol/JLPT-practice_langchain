@@ -75,7 +75,7 @@ async def generate_practice_questions(
     chat_model: Any = Depends(get_chat_model),
     settings: Settings = Depends(get_settings),
 ) -> PracticeGenerateResponse:
-    """Generate 1-5 AI-labeled JLPT vocabulary or grammar questions in one batch call."""
+    """Generate unofficial AI-labeled JLPT vocabulary, grammar, or reading questions in one batch call."""
     apply_no_store_headers(response)
     try:
         return await generate_practice_batch(
@@ -253,11 +253,12 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>JLPT Practice & Tutor (Self-Study Ephemeral Mode)</title>
+  <title>JLPT Practice & Tutor (Unofficial AI Self-Study)</title>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; color: #1e293b; }
     .top-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; }
     .card { border: 1px solid #cbd5e1; border-radius: 8px; padding: 1.25rem; margin-bottom: 1.5rem; background: #f8fafc; }
+    .passage-card { border: 1px solid #93c5fd; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #eff6ff; white-space: pre-wrap; }
     .question-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #ffffff; }
     .row { display: flex; gap: 0.75rem; margin-bottom: 0.75rem; flex-wrap: wrap; align-items: center; }
     select, input[type="text"], button { padding: 0.5rem 0.75rem; border-radius: 6px; border: 1px solid #94a3b8; font-size: 0.95rem; }
@@ -279,26 +280,27 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
 </head>
 <body>
   <div class="top-bar">
-    <h1>JLPT Practice &amp; Tutor <span class="badge">Self-Study / Ephemeral Memory</span></h1>
+    <h1>JLPT Practice &amp; Tutor <span class="badge">Unofficial AI Practice / Approximate Difficulty</span></h1>
     <button type="button" id="reset-session-btn" class="danger" onclick="resetSession()">Reset Session</button>
   </div>
   <div class="notice">
-    <strong>Privacy &amp; Self-Study Notice:</strong> Generated practice sets, selected answers, scores, and tutor messages are kept exclusively in browser JavaScript runtime memory (never saved to <code>localStorage</code>, <code>sessionStorage</code>, cookies, or any backend database). Multiple-choice grading compares your selections locally in the browser against the generated answer key without calling Gemini. Because the browser-held answer key is inspectable in developer tools, scoring is for self-study feedback and is not tamper-proof. Click <strong>Reset Session</strong> at any time to clear all quiz and conversation state.
+    <strong>Unofficial AI Practice &amp; Self-Study Notice:</strong> All questions and reading passages are unofficial AI-generated practice material with approximate JLPT difficulty. Practice accuracy is for self-study feedback only and does not predict an official JLPT score. State is kept exclusively in browser JavaScript runtime memory (never saved to <code>localStorage</code>, <code>sessionStorage</code>, cookies, or any backend database). Multiple-choice grading compares your selections locally in the browser against the inspectable answer key without calling Gemini, and is not tamper-proof.
   </div>
 
   <div class="card">
-    <h2>1. JLPT Practice Quiz (Vocabulary &amp; Grammar)</h2>
+    <h2>1. JLPT Practice Quiz (Vocabulary, Grammar &amp; Reading)</h2>
     <div class="row">
       <select id="level" aria-label="JLPT Level">
-        <option value="N5">JLPT N5</option>
-        <option value="N4">JLPT N4</option>
-        <option value="N3">JLPT N3</option>
-        <option value="N2">JLPT N2</option>
-        <option value="N1">JLPT N1</option>
+        <option value="N5">JLPT N5 (Approx.)</option>
+        <option value="N4">JLPT N4 (Approx.)</option>
+        <option value="N3">JLPT N3 (Approx.)</option>
+        <option value="N2">JLPT N2 (Approx.)</option>
+        <option value="N1">JLPT N1 (Approx.)</option>
       </select>
-      <select id="category" aria-label="Practice Category">
+      <select id="category" aria-label="Practice Category" onchange="syncQuestionCountLimit()">
         <option value="grammar">Grammar</option>
         <option value="vocabulary">Vocabulary</option>
+        <option value="reading">Reading (Passage + up to 3 Qs)</option>
       </select>
       <select id="question_count" aria-label="Question Count">
         <option value="1">1 Question</option>
@@ -348,6 +350,19 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
     let activeTutorQuestionIndex = 0;
     let conversationHistory = [];
 
+    function syncQuestionCountLimit() {
+      const cat = document.getElementById('category').value;
+      const countSelect = document.getElementById('question_count');
+      const maxAllowed = cat === 'reading' ? 3 : 5;
+      Array.from(countSelect.options).forEach((opt) => {
+        const val = parseInt(opt.value, 10);
+        opt.disabled = val > maxAllowed;
+      });
+      if (parseInt(countSelect.value, 10) > maxAllowed) {
+        countSelect.value = String(maxAllowed);
+      }
+    }
+
     function updateTutorQuestionSelector() {
       const sel = document.getElementById('tutor-question-select');
       sel.innerHTML = '';
@@ -374,6 +389,7 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
     }
 
     async function generatePracticeSet() {
+      syncQuestionCountLimit();
       const level = document.getElementById('level').value;
       const category = document.getElementById('category').value;
       const question_count = parseInt(document.getElementById('question_count').value, 10);
@@ -387,7 +403,7 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
       document.getElementById('quiz-container').innerHTML = '';
       document.getElementById('quiz-score-summary').innerHTML = '';
       document.getElementById('quiz-actions').style.display = 'none';
-      statusEl.textContent = 'Generating AI practice set...';
+      statusEl.textContent = 'Generating unofficial AI practice set...';
 
       try {
         const res = await fetch('/api/practice/generate', {
@@ -402,7 +418,7 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
           return;
         }
         currentPracticeSet = data;
-        statusEl.textContent = `${data.content_label} — Select an answer for each question, then click Submit Answers.`;
+        statusEl.textContent = `${data.content_label} (${data.difficulty_label}) — Select an answer for each question, then click Submit Answers.`;
         updateTutorQuestionSelector();
         renderQuiz();
       } catch (err) {
@@ -438,6 +454,7 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
         selectedOptionText: typeof selectedIndex === 'number' ? question.options[selectedIndex] : null,
         correctIndex: question.correct_index,
         correctOptionText,
+        supportingSentence: question.supporting_sentence || null,
         whyCorrectFits,
         whyAlternativesDoNotFit
       };
@@ -471,6 +488,18 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
         return;
       }
 
+      if (currentPracticeSet.passage) {
+        const passageBox = document.createElement('div');
+        passageBox.className = 'passage-card';
+        const pTitle = document.createElement('div');
+        pTitle.innerHTML = '<strong>Reading Passage</strong> <span class="badge">Unofficial AI Reading (Approx. Difficulty)</span>';
+        passageBox.appendChild(pTitle);
+        const pBody = document.createElement('p');
+        pBody.textContent = currentPracticeSet.passage;
+        passageBox.appendChild(pBody);
+        container.appendChild(passageBox);
+      }
+
       let correctCount = 0;
 
       currentPracticeSet.questions.forEach((q, qIdx) => {
@@ -486,7 +515,7 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
         const aiTag = document.createElement('span');
         aiTag.className = 'badge';
         aiTag.style.marginLeft = '0.5rem';
-        aiTag.textContent = 'AI-Generated';
+        aiTag.textContent = 'Unofficial AI (Approx. Level)';
         header.appendChild(aiTag);
 
         const askBtn = document.createElement('button');
@@ -495,7 +524,7 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
         askBtn.style.marginLeft = '0.5rem';
         askBtn.style.fontSize = '0.8rem';
         askBtn.style.padding = '0.2rem 0.5rem';
-        askBtn.textContent = `Focus in Tutor`;
+        askBtn.textContent = 'Focus in Tutor';
         askBtn.onclick = () => selectTutorQuestion(qIdx);
         header.appendChild(askBtn);
 
@@ -539,6 +568,13 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
           );
           feedbackPanel.appendChild(correctLine);
 
+          if (evalResult.supportingSentence) {
+            const supportLine = document.createElement('p');
+            supportLine.innerHTML = '<strong>Supporting Sentence from Passage:</strong> ';
+            supportLine.appendChild(document.createTextNode(evalResult.supportingSentence));
+            feedbackPanel.appendChild(supportLine);
+          }
+
           const whyFitsLine = document.createElement('p');
           whyFitsLine.innerHTML = '<strong>Why it fits:</strong> ';
           whyFitsLine.appendChild(document.createTextNode(evalResult.whyCorrectFits));
@@ -570,7 +606,7 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
         const scoreBox = document.createElement('div');
         scoreBox.className = 'notice';
         scoreBox.textContent =
-          `Self-Study Score: ${correctCount} / ${total} (Graded locally in browser memory against the inspectable answer key; not tamper-proof and not stored).`;
+          `Self-Study Score: ${correctCount} / ${total} — Unofficial AI practice (approximate difficulty). Graded locally in browser memory against the inspectable answer key (not tamper-proof, not stored, and does not predict an official JLPT score).`;
         summaryEl.appendChild(scoreBox);
       }
     }
@@ -585,11 +621,13 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
         const selIdx = selectedAnswers[q.id];
         return {
           id: q.id,
+          passage: currentPracticeSet.passage || null,
           question_text: q.question_text,
           options: q.options,
           correct_index: q.correct_index,
           correct_answer: q.correct_answer,
           selected_answer: typeof selIdx === 'number' ? q.options[selIdx] : null,
+          supporting_sentence: q.supporting_sentence || null,
           option_explanations: q.option_explanations
         };
       }
@@ -618,7 +656,6 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
       const level = document.getElementById('level').value;
       const explanation_language = document.getElementById('explanation_language').value;
       const selectedQuestion = getSelectedQuestionPayload();
-      // Send only the single selected question and a bounded recent conversation window
       const recentWindow = conversationHistory.slice(-MAX_RECENT_MESSAGES);
       input.value = '';
 

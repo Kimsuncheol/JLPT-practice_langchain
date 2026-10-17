@@ -1,4 +1,4 @@
-"""Tests for JLPT Practice & Tutor FastAPI application, batch generation, quiz feedback, tutor, and privacy."""
+"""Tests for JLPT Practice & Tutor FastAPI application, batch generation, reading, quiz feedback, tutor, and privacy."""
 
 import os
 from typing import Any
@@ -131,12 +131,16 @@ def test_practice_generate_batch_single_call_and_dependency_injection() -> None:
     assert data["question_count"] == 2
     assert data["explanation_language"] == "English"
     assert data["ai_generated"] is True
-    assert "AI-generated" in data["content_label"]
+    assert data["unofficial_practice"] is True
+    assert "approximate" in data["difficulty_label"].lower()
+    assert "unofficial" in data["content_label"].lower()
+    assert "does not predict" in data["score_disclaimer"].lower()
     assert "not tamper-proof" in data["self_study_notice"]
 
     # Verify structural validation vs linguistic correctness distinction
     assert data["validation"]["structural_validation_passed"] is True
     assert data["validation"]["linguistic_correctness_guaranteed"] is False
+    assert data["validation"]["official_score_predictive"] is False
     assert "linguistic" in data["validation"]["notice"].lower()
 
     # Verify each question's structure and stable ID
@@ -154,6 +158,155 @@ def test_practice_generate_batch_single_call_and_dependency_injection() -> None:
     assert len(first_q["options"]) == 4
     assert len(first_q["option_explanations"]) == 4
     assert first_q["ai_generated"] is True
+    assert "approximate" in first_q["difficulty_label"].lower()
+
+
+def test_practice_generate_reading_passage_and_supporting_sentence() -> None:
+    """POST /api/practice/generate supports reading with passage, up to 3 questions, and supporting sentences."""
+    passage = (
+        "先週の日曜日、私は友達と近くの山へハイキングに行きました。"
+        "天気がよくて、山の頂上からきれいな海が見えました。"
+        "帰りに駅の近くの喫茶店でコーヒーを飲みました。"
+    )
+    support_1 = "天気がよくて、山の頂上からきれいな海が見えました。"
+    support_2 = "帰りに駅の近くの喫茶店でコーヒーを飲みました。"
+
+    fake_reading_batch = LLMPracticeBatchOutput(
+        passage=passage,
+        questions=[
+            LLMGeneratedQuestionItem(
+                question_text="山の頂上から何が見えましたか。",
+                options=["きれいな海", "駅の喫茶店", "新しい図書館", "大きな川"],
+                correct_index=0,
+                supporting_sentence=support_1,
+                option_explanations=[
+                    f"Correct: The passage states 「{support_1}」, so the sea was visible.",
+                    "Incorrect: The cafe was visited on the way back near the station.",
+                    "Incorrect: No library is mentioned in the passage.",
+                    "Incorrect: A river is not mentioned.",
+                ],
+            ),
+            LLMGeneratedQuestionItem(
+                question_text="帰りにどこでコーヒーを飲みましたか。",
+                options=["駅の近くの喫茶店", "山の頂上", "友達の家", "電車の中"],
+                correct_index=0,
+                supporting_sentence=support_2,
+                option_explanations=[
+                    "Correct: They drank coffee at a cafe near the station on the way back.",
+                    "Incorrect: At the top of the mountain they looked at the sea.",
+                    "Incorrect: They did not go to the friend's house.",
+                    "Incorrect: They did not drink coffee inside a train.",
+                ],
+            ),
+        ],
+    )
+    fake_model = FakeStructuredChatModel(fake_reading_batch)
+
+    app = create_app()
+    app.dependency_overrides[get_chat_model] = lambda: fake_model
+    client = TestClient(app)
+
+    res = client.post(
+        "/api/practice/generate",
+        json={
+            "level": "N4",
+            "category": "reading",
+            "question_count": 2,
+            "explanation_language": "English",
+        },
+    )
+    assert res.status_code == 200
+    assert res.headers.get("Cache-Control") == "no-store"
+    assert fake_model.call_count == 1
+
+    body = res.json()
+    assert body["category"] == "reading"
+    assert body["passage"] == passage
+    assert len(body["questions"]) == 2
+    assert body["questions"][0]["supporting_sentence"] == support_1
+    assert body["questions"][1]["supporting_sentence"] == support_2
+
+    # Supporting sentence must be included in every explanation for reading items
+    for q in body["questions"]:
+        for exp in q["option_explanations"]:
+            assert q["supporting_sentence"] in exp
+
+
+def test_practice_generate_reading_bounds_and_validation() -> None:
+    """Reading category enforces max 3 questions, requires a passage, and verifies supporting sentences."""
+    fake_model = FakeStructuredChatModel(None)
+    app = create_app()
+    app.dependency_overrides[get_chat_model] = lambda: fake_model
+    client = TestClient(app)
+
+    # Reading with 4 questions is rejected (422)
+    res_four = client.post(
+        "/api/practice/generate",
+        json={
+            "level": "N3",
+            "category": "reading",
+            "question_count": 4,
+            "explanation_language": "English",
+        },
+    )
+    assert res_four.status_code == 422
+    assert res_four.headers.get("Cache-Control") == "no-store"
+
+    # Reading output missing a passage is rejected by structural validation (502)
+    missing_passage_batch = {
+        "passage": None,
+        "questions": [
+            {
+                "question_text": "何が正しいですか。",
+                "options": ["あ", "い", "う", "え"],
+                "correct_index": 0,
+                "supporting_sentence": "あいうえお。",
+                "option_explanations": ["1", "2", "3", "4"],
+            }
+        ],
+    }
+    app.dependency_overrides[get_chat_model] = lambda: FakeStructuredChatModel(
+        missing_passage_batch
+    )
+    res_no_passage = client.post(
+        "/api/practice/generate",
+        json={
+            "level": "N5",
+            "category": "reading",
+            "question_count": 1,
+            "explanation_language": "English",
+        },
+    )
+    assert res_no_passage.status_code == 502
+    assert "passage" in res_no_passage.json()["detail"].lower()
+
+    # Reading output whose supporting_sentence is not in the passage is rejected (502)
+    unmatched_support_batch = {
+        "passage": "今日は朝から雨が降っています。だから家で本を読みます。",
+        "questions": [
+            {
+                "question_text": "どうして家にいますか。",
+                "options": ["雨が降っているから", "雪が降っているから", "風が強いから", "暑いから"],
+                "correct_index": 0,
+                "supporting_sentence": "昨日はとてもいい天気でした。",
+                "option_explanations": ["1", "2", "3", "4"],
+            }
+        ],
+    }
+    app.dependency_overrides[get_chat_model] = lambda: FakeStructuredChatModel(
+        unmatched_support_batch
+    )
+    res_bad_support = client.post(
+        "/api/practice/generate",
+        json={
+            "level": "N5",
+            "category": "reading",
+            "question_count": 1,
+            "explanation_language": "English",
+        },
+    )
+    assert res_bad_support.status_code == 502
+    assert "supporting_sentence" in res_bad_support.json()["detail"]
 
 
 def test_practice_generate_supports_korean_and_japanese_and_vocabulary() -> None:
@@ -216,12 +369,12 @@ def test_practice_generate_input_validation_bounds() -> None:
     assert res_high.status_code == 422
     assert res_high.headers.get("Cache-Control") == "no-store"
 
-    # Unsupported category ('reading') rejected on /api/practice/generate (422)
+    # Unsupported category ('listening') rejected on /api/practice/generate (422)
     res_cat = client.post(
         "/api/practice/generate",
         json={
             "level": "N5",
-            "category": "reading",
+            "category": "listening",
             "question_count": 1,
             "explanation_language": "English",
         },
@@ -356,7 +509,9 @@ def test_local_quiz_grading_does_not_call_gemini_and_explains_all_options() -> N
         assert "direct object" in body["why_alternatives_do_not_fit"][0]["why_it_does_not_fit"]
         assert body["self_study_mode"] is True
         assert body["tamper_proof"] is False
+        assert body["official_score_predictive"] is False
         assert "not tamper-proof" in body["scoring_notice"]
+        assert "does not predict" in body["score_disclaimer"].lower()
 
 
 def test_tutor_endpoint_for_selected_practice_item_and_server_controlled_prompt() -> None:
@@ -479,14 +634,13 @@ def test_tutor_validates_message_roles_lengths_and_recent_window_bounds() -> Non
 
 
 def test_browser_quiz_ui_keeps_state_in_memory_and_supports_reset_session() -> None:
-    """GET / serves interactive self-study quiz flow, /api/tutor integration, and Reset Session."""
+    """GET / serves interactive self-study quiz flow, reading support, /api/tutor, and Reset Session."""
     client = TestClient(create_app())
     res = client.get("/")
     assert res.status_code == 200
     assert res.headers.get("Cache-Control") == "no-store"
 
     html = res.text
-    # In-memory state variables, local grading, bounded tutor window, and resetSession
     assert "const MAX_RECENT_MESSAGES = 6;" in html
     assert "let currentPracticeSet = null;" in html
     assert "let selectedAnswers = {};" in html
@@ -496,6 +650,8 @@ def test_browser_quiz_ui_keeps_state_in_memory_and_supports_reset_session() -> N
     assert "function getSelectedQuestionPayload()" in html
     assert "function resetSession()" in html
     assert "Reset Session" in html
+    assert "Supporting Sentence from Passage:" in html
+    assert "does not predict an official JLPT score" in html
     assert "fetch('/api/tutor'" in html
     assert "Why it fits:" in html
     assert "Why the alternatives do not fit:" in html

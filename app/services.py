@@ -1,9 +1,12 @@
-"""Stateless AI services using langchain-google-genai.
+"""Stateless AI services using langchain-google-genai and local multiple-choice grading.
 
-Privacy guarantees:
-- No prompts, answers, generated questions, conversation content, or API keys are ever logged or stored.
+Privacy & self-study guarantees:
+- No prompts, answers, generated questions, explanations, scores, conversation content,
+  or API keys are ever logged or stored.
 - No database, files, or persistent memory are used.
-- Conversation context and generated batches exist strictly in request-local scope during execution.
+- Ordinary multiple-choice grading is performed deterministically against the answer key
+  without calling Gemini.
+- Conversation context and generated batches exist strictly in request-local scope.
 - No Gemini client instantiation or network call occurs at import, startup, or health check time.
 """
 
@@ -16,12 +19,12 @@ from pydantic import ValidationError
 
 from app.config import Settings, enforce_privacy_environment, get_settings
 from app.prompts import (
-    ANSWER_EVALUATION_PROMPT,
     PRACTICE_BATCH_GENERATE_PROMPT,
     PRACTICE_QUESTION_PROMPT,
     TUTOR_CHAT_PROMPT,
 )
 from app.schemas import (
+    AlternativeExplanation,
     AnswerEvaluationRequest,
     AnswerEvaluationResponse,
     ChatMessage,
@@ -53,7 +56,7 @@ class StructuralValidationError(ValueError):
 def create_chat_model(settings: Settings | None = None) -> ChatGoogleGenerativeAI:
     """Instantiate ChatGoogleGenerativeAI lazily for a single request with bounded parameters.
 
-    Never called during application startup or /health checks.
+    Never called during application startup, /health checks, or multiple-choice grading.
     """
     enforce_privacy_environment()
     cfg = settings or get_settings()
@@ -206,22 +209,75 @@ async def evaluate_practice_answer(
     payload: AnswerEvaluationRequest,
     settings: Settings | None = None,
 ) -> AnswerEvaluationResponse:
-    """Evaluate a learner's answer without logging or persistence."""
-    llm = create_chat_model(settings)
-    structured_llm = llm.with_structured_output(AnswerEvaluationResponse)
-    chain = ANSWER_EVALUATION_PROMPT | structured_llm
+    """Compare a learner's selected multiple-choice answer locally against the answer key.
 
-    result = await chain.ainvoke(
-        {
-            "level": payload.level.value,
-            "question": payload.question,
-            "selected_answer": payload.selected_answer,
-            "correct_answer": payload.correct_answer or "Not specified",
-        }
+    Does NOT call Gemini or persist any answers, explanations, or scores.
+    """
+    _ = settings
+    enforce_privacy_environment()
+
+    selected = payload.selected_answer.strip()
+    options = payload.options or []
+    explanations = payload.option_explanations or []
+
+    resolved_correct_index = payload.correct_index
+    if (
+        resolved_correct_index is not None
+        and 0 <= resolved_correct_index < len(options)
+    ):
+        resolved_correct_answer = options[resolved_correct_index].strip()
+    else:
+        resolved_correct_answer = (payload.correct_answer or "").strip()
+        if resolved_correct_answer and resolved_correct_answer in options:
+            resolved_correct_index = options.index(resolved_correct_answer)
+
+    is_correct = bool(
+        resolved_correct_answer and selected == resolved_correct_answer
     )
-    if isinstance(result, AnswerEvaluationResponse):
-        return result
-    return AnswerEvaluationResponse.model_validate(result)
+
+    why_correct_fits = ""
+    alternatives: list[AlternativeExplanation] = []
+
+    if (
+        len(options) == 4
+        and len(explanations) == 4
+        and resolved_correct_index is not None
+        and 0 <= resolved_correct_index < 4
+    ):
+        why_correct_fits = explanations[resolved_correct_index]
+        for idx, opt_text in enumerate(options):
+            if idx == resolved_correct_index:
+                continue
+            alternatives.append(
+                AlternativeExplanation(
+                    option_index=idx,
+                    option_text=opt_text,
+                    was_selected=(opt_text.strip() == selected),
+                    why_it_does_not_fit=explanations[idx],
+                )
+            )
+    elif resolved_correct_answer:
+        why_correct_fits = f"The correct option is '{resolved_correct_answer}'."
+
+    if is_correct:
+        feedback = f"Correct! '{resolved_correct_answer}' is the right choice. {why_correct_fits}".strip()
+    elif resolved_correct_answer:
+        feedback = (
+            f"Not quite. You selected '{selected}', but the correct answer is "
+            f"'{resolved_correct_answer}'. {why_correct_fits}".strip()
+        )
+    else:
+        feedback = "No answer key was provided for local comparison."
+
+    return AnswerEvaluationResponse(
+        is_correct=is_correct,
+        selected_answer=selected,
+        correct_answer=resolved_correct_answer,
+        why_correct_fits=why_correct_fits,
+        why_alternatives_do_not_fit=alternatives,
+        feedback=feedback,
+        grammar_notes=[],
+    )
 
 
 async def run_tutor_chat(

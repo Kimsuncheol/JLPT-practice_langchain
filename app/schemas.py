@@ -1,9 +1,11 @@
-"""Pydantic schemas for JLPT practice generation, evaluation, tutor chat, and health checks.
+"""Pydantic schemas for JLPT practice generation, local quiz feedback, tutor chat, and health checks.
 
-Distinguishes structural validation (enforced deterministically by Pydantic validators:
-Japanese script presence, 4 distinct options, valid single answer index 0-3, 4 option
-explanations, stable ID, and batch count bounds) from linguistic/pedagogical correctness
-(which depends on the generative model and cannot be guaranteed by schema checks alone).
+Distinguishes:
+1. Structural validation (enforced deterministically by Pydantic validators) vs.
+   linguistic correctness (not guaranteed for AI-generated content).
+2. Self-study local grading: answer keys are held in browser memory (inspectable by the
+   learner) and compared locally without calling Gemini or persisting scores/answers.
+   Scoring is explicitly for self-study and is never described as tamper-proof.
 """
 
 import hashlib
@@ -27,6 +29,12 @@ STRUCTURAL_VS_LINGUISTIC_DISCLAIMER = (
     "single valid answer index, and per-option explanations verified). "
     "Note: Structural validation does not guarantee linguistic nuance or pedagogical accuracy "
     "of AI-generated content."
+)
+
+SELF_STUDY_GRADING_NOTICE = (
+    "Self-study mode: The answer key is held in browser memory and compared locally without "
+    "calling Gemini or storing scores. Because a browser-held answer key is inspectable, "
+    "this scoring is for self-study feedback only and is not tamper-proof."
 )
 
 
@@ -294,6 +302,7 @@ class PracticeGenerateResponse(BaseModel):
     content_label: str = Field(
         default="AI-generated original JLPT practice material (not official past exam items)"
     )
+    self_study_notice: str = Field(default=SELF_STUDY_GRADING_NOTICE)
     validation: ValidationReport = Field(default_factory=ValidationReport)
     questions: list[GeneratedPracticeQuestion] = Field(..., min_length=1, max_length=5)
 
@@ -311,6 +320,46 @@ class PracticeGenerateResponse(BaseModel):
                 "Structural validation failed: duplicate question IDs in generated batch."
             )
         return self
+
+
+class AlternativeExplanation(BaseModel):
+    """Explanation for why a distractor option does not fit."""
+
+    option_index: int = Field(..., ge=0, le=3)
+    option_text: str
+    was_selected: bool = False
+    why_it_does_not_fit: str
+
+
+class AnswerEvaluationRequest(BaseModel):
+    """Request payload for deterministic, non-Gemini multiple-choice answer evaluation."""
+
+    level: JLPTLevel = Field(default=JLPTLevel.N5)
+    question: str = Field(..., min_length=1, max_length=2000)
+    selected_answer: str = Field(..., min_length=1, max_length=500)
+    correct_answer: Optional[str] = Field(default=None, max_length=500)
+    options: Optional[list[str]] = Field(default=None, min_length=4, max_length=4)
+    correct_index: Optional[int] = Field(default=None, ge=0, le=3)
+    option_explanations: Optional[list[str]] = Field(
+        default=None, min_length=4, max_length=4
+    )
+
+
+class AnswerEvaluationResponse(BaseModel):
+    """Local/deterministic feedback for a submitted multiple-choice answer (no Gemini call)."""
+
+    is_correct: bool
+    selected_answer: str = ""
+    correct_answer: str = ""
+    why_correct_fits: str = ""
+    why_alternatives_do_not_fit: list[AlternativeExplanation] = Field(
+        default_factory=list
+    )
+    feedback: str
+    grammar_notes: list[str] = Field(default_factory=list)
+    self_study_mode: Literal[True] = True
+    tamper_proof: Literal[False] = False
+    scoring_notice: str = Field(default=SELF_STUDY_GRADING_NOTICE)
 
 
 class ChatMessage(BaseModel):
@@ -356,23 +405,6 @@ class PracticeQuestionResponse(BaseModel):
     explanation: str = Field(
         ..., description="Explanation of why the correct option is right."
     )
-
-
-class AnswerEvaluationRequest(BaseModel):
-    """Request payload for evaluating a learner's answer to a JLPT question."""
-
-    level: JLPTLevel = Field(default=JLPTLevel.N5)
-    question: str = Field(..., min_length=1, max_length=2000)
-    selected_answer: str = Field(..., min_length=1, max_length=500)
-    correct_answer: Optional[str] = Field(default=None, max_length=500)
-
-
-class AnswerEvaluationResponse(BaseModel):
-    """Structured feedback for a learner's submitted answer."""
-
-    is_correct: bool
-    feedback: str
-    grammar_notes: list[str] = Field(default_factory=list)
 
 
 class TutorChatRequest(BaseModel):

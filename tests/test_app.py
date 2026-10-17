@@ -1,4 +1,4 @@
-"""Tests for JLPT Practice & Tutor FastAPI application, batch generation, and privacy constraints."""
+"""Tests for JLPT Practice & Tutor FastAPI application, batch generation, quiz feedback, and privacy."""
 
 import os
 from typing import Any
@@ -9,7 +9,6 @@ from langchain_core.runnables import RunnableLambda
 from app.config import Settings, enforce_privacy_environment
 from app.main import create_app
 from app.schemas import (
-    AnswerEvaluationResponse,
     ChatMessage,
     JLPTLevel,
     LLMGeneratedQuestionItem,
@@ -132,6 +131,7 @@ def test_practice_generate_batch_single_call_and_dependency_injection() -> None:
     assert data["explanation_language"] == "English"
     assert data["ai_generated"] is True
     assert "AI-generated" in data["content_label"]
+    assert "not tamper-proof" in data["self_study_notice"]
 
     # Verify structural validation vs linguistic correctness distinction
     assert data["validation"]["structural_validation_passed"] is True
@@ -241,7 +241,6 @@ def test_practice_generate_input_validation_bounds() -> None:
 
 def test_practice_generate_structural_validation_rejects_malformed_model_output() -> None:
     """Structural validation catches duplicate options, non-Japanese text, or mismatched batch count."""
-    # Case 1: Model returns duplicate options
     duplicate_options_dict = {
         "questions": [
             {
@@ -271,7 +270,6 @@ def test_practice_generate_structural_validation_rejects_malformed_model_output(
     assert res_dup.headers.get("Cache-Control") == "no-store"
     assert "structural" in res_dup.json()["detail"].lower()
 
-    # Case 2: Model returns non-Japanese question_text
     non_jp_dict = {
         "questions": [
             {
@@ -296,7 +294,6 @@ def test_practice_generate_structural_validation_rejects_malformed_model_output(
     )
     assert res_no_jp.status_code == 502
 
-    # Case 3: Model returns 1 question when 2 were requested
     one_question_batch = LLMPracticeBatchOutput(
         questions=[
             LLMGeneratedQuestionItem(
@@ -321,6 +318,67 @@ def test_practice_generate_structural_validation_rejects_malformed_model_output(
     )
     assert res_count_mismatch.status_code == 502
     assert "requested 2" in res_count_mismatch.json()["detail"]
+
+
+def test_local_quiz_grading_does_not_call_gemini_and_explains_all_options() -> None:
+    """Multiple-choice evaluation compares against answer key locally without calling Gemini."""
+    with patch("app.services.ChatGoogleGenerativeAI") as mock_genai:
+        client = TestClient(create_app())
+        res = client.post(
+            "/api/practice/evaluate",
+            json={
+                "level": "N5",
+                "question": "わたし（　）がくせいです。",
+                "selected_answer": "を",
+                "options": ["は", "を", "に", "で"],
+                "correct_index": 0,
+                "option_explanations": [
+                    "は marks the sentence topic.",
+                    "を marks a direct object, not a predicate noun with です.",
+                    "に marks direction or time/location.",
+                    "で marks means or location of action.",
+                ],
+            },
+        )
+        assert res.status_code == 200
+        assert res.headers.get("Cache-Control") == "no-store"
+        mock_genai.assert_not_called()
+
+        body = res.json()
+        assert body["is_correct"] is False
+        assert body["selected_answer"] == "を"
+        assert body["correct_answer"] == "は"
+        assert body["why_correct_fits"] == "は marks the sentence topic."
+        assert len(body["why_alternatives_do_not_fit"]) == 3
+        assert body["why_alternatives_do_not_fit"][0]["option_text"] == "を"
+        assert body["why_alternatives_do_not_fit"][0]["was_selected"] is True
+        assert "direct object" in body["why_alternatives_do_not_fit"][0]["why_it_does_not_fit"]
+        assert body["self_study_mode"] is True
+        assert body["tamper_proof"] is False
+        assert "not tamper-proof" in body["scoring_notice"]
+
+
+def test_browser_quiz_ui_keeps_state_in_memory_and_reveals_after_submission() -> None:
+    """GET / serves interactive self-study quiz flow with local grading and post-submit explanations."""
+    client = TestClient(create_app())
+    res = client.get("/")
+    assert res.status_code == 200
+    assert res.headers.get("Cache-Control") == "no-store"
+
+    html = res.text
+    # In-memory state variables and local grading functions present
+    assert "let currentPracticeSet = null;" in html
+    assert "let selectedAnswers = {};" in html
+    assert "let isQuizSubmitted = false;" in html
+    assert "function compareAnswerLocally(" in html
+    assert "function submitQuizLocally()" in html
+    assert "Why it fits:" in html
+    assert "Why the alternatives do not fit:" in html
+    assert "not tamper-proof" in html
+
+    # Ensure Web Storage APIs are never invoked to store answers/scores
+    assert "localStorage.setItem" not in html
+    assert "sessionStorage.setItem" not in html
 
 
 def test_create_chat_model_passes_bounded_parameters() -> None:
@@ -369,27 +427,6 @@ def test_practice_and_tutor_responses_include_no_store_header() -> None:
         assert res_q.headers.get("Cache-Control") == "no-store"
         assert res_q.json()["correct_index"] == 0
 
-    mock_eval = AnswerEvaluationResponse(
-        is_correct=True,
-        feedback="Correct! は marks the topic.",
-        grammar_notes=["N1 は N2 です"],
-    )
-    with patch(
-        "app.routes.evaluate_practice_answer",
-        return_value=mock_eval,
-    ):
-        res_e = client.post(
-            "/api/practice/evaluate",
-            json={
-                "level": "N5",
-                "question": "わたし（　）がくせいです。",
-                "selected_answer": "は",
-            },
-        )
-        assert res_e.status_code == 200
-        assert res_e.headers.get("Cache-Control") == "no-store"
-        assert res_e.json()["is_correct"] is True
-
     mock_tutor = TutorChatResponse(
         level=JLPTLevel.N5,
         reply="「は」is pronounced 'wa' when used as a topic particle.",
@@ -412,7 +449,7 @@ def test_practice_and_tutor_responses_include_no_store_header() -> None:
 
 
 def test_missing_credentials_returns_503_with_no_store() -> None:
-    """Calling practice endpoints without GEMINI_API_KEY returns 503 with Cache-Control: no-store."""
+    """Calling practice generation without GEMINI_API_KEY returns 503 with Cache-Control: no-store."""
     client = TestClient(create_app())
     res = client.post(
         "/api/practice/generate",

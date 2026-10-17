@@ -17,10 +17,13 @@ from app.schemas import (
     PracticeQuestionResponse,
     TutorChatRequest,
     TutorChatResponse,
+    TutorRequest,
+    TutorResponse,
 )
 from app.services import (
     MissingCredentialsError,
     StructuralValidationError,
+    answer_practice_item_tutor_question,
     evaluate_practice_answer,
     generate_practice_batch,
     generate_practice_question,
@@ -161,6 +164,57 @@ async def evaluate_answer(
 
 
 @router.post(
+    "/api/tutor",
+    response_model=TutorResponse,
+    tags=["tutor"],
+)
+@router.post(
+    "/tutor",
+    response_model=TutorResponse,
+    tags=["tutor"],
+    include_in_schema=False,
+)
+async def tutor_for_practice_item(
+    payload: TutorRequest,
+    response: Response,
+    chat_model: Any = Depends(get_chat_model),
+    settings: Settings = Depends(get_settings),
+) -> TutorResponse:
+    """Answer questions about the selected practice item using a bounded recent conversation window."""
+    apply_no_store_headers(response)
+    try:
+        return await answer_practice_item_tutor_question(
+            payload=payload,
+            chat_model=chat_model,
+            settings=settings,
+        )
+    except MissingCredentialsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+            headers={"Cache-Control": "no-store"},
+        ) from None
+    except StructuralValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+            headers={"Cache-Control": "no-store"},
+        ) from None
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Tutor request timed out.",
+            headers={"Cache-Control": "no-store"},
+        ) from None
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to process tutor request.",
+            headers={"Cache-Control": "no-store"},
+        ) from None
+
+
+@router.post(
     "/tutor/chat",
     response_model=TutorChatResponse,
     tags=["tutor"],
@@ -173,12 +227,13 @@ async def evaluate_answer(
 async def tutor_chat(
     payload: TutorChatRequest,
     response: Response,
+    chat_model: Any = Depends(get_chat_model),
     settings: Settings = Depends(get_settings),
 ) -> TutorChatResponse:
     """Stateless JLPT tutor endpoint. Context stays only in browser & request-local memory."""
     apply_no_store_headers(response)
     try:
-        return await run_tutor_chat(payload, settings=settings)
+        return await run_tutor_chat(payload, chat_model=chat_model, settings=settings)
     except MissingCredentialsError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -201,6 +256,7 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
   <title>JLPT Practice & Tutor (Self-Study Ephemeral Mode)</title>
   <style>
     body { font-family: system-ui, -apple-system, sans-serif; max-width: 860px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; color: #1e293b; }
+    .top-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; }
     .card { border: 1px solid #cbd5e1; border-radius: 8px; padding: 1.25rem; margin-bottom: 1.5rem; background: #f8fafc; }
     .question-card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; margin-top: 1rem; background: #ffffff; }
     .row { display: flex; gap: 0.75rem; margin-bottom: 0.75rem; flex-wrap: wrap; align-items: center; }
@@ -209,6 +265,8 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
     button:hover { background: #1d4ed8; }
     button.secondary { background: #475569; }
     button.secondary:hover { background: #334155; }
+    button.danger { background: #dc2626; }
+    button.danger:hover { background: #b91c1c; }
     .badge { font-size: 0.8rem; background: #dbeafe; color: #1e40af; padding: 0.2rem 0.55rem; border-radius: 4px; font-weight: 600; }
     .notice { font-size: 0.88rem; color: #475569; background: #f1f5f9; border-left: 4px solid #64748b; padding: 0.6rem 0.8rem; margin: 0.75rem 0; border-radius: 4px; }
     .option-label { display: block; padding: 0.45rem 0.6rem; margin: 0.35rem 0; border: 1px solid #e2e8f0; border-radius: 6px; cursor: pointer; }
@@ -220,9 +278,12 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
   </style>
 </head>
 <body>
-  <h1>JLPT Practice & Tutor <span class="badge">Self-Study / Ephemeral Memory</span></h1>
+  <div class="top-bar">
+    <h1>JLPT Practice &amp; Tutor <span class="badge">Self-Study / Ephemeral Memory</span></h1>
+    <button type="button" id="reset-session-btn" class="danger" onclick="resetSession()">Reset Session</button>
+  </div>
   <div class="notice">
-    <strong>Privacy &amp; Self-Study Notice:</strong> Generated practice sets, selected answers, scores, and tutor messages are kept exclusively in browser JavaScript runtime memory (never saved to <code>localStorage</code>, <code>sessionStorage</code>, cookies, or any backend database). Multiple-choice grading compares your selections locally in the browser against the generated answer key without calling Gemini. Because the browser-held answer key is inspectable in developer tools, scoring is for self-study feedback and is not tamper-proof.
+    <strong>Privacy &amp; Self-Study Notice:</strong> Generated practice sets, selected answers, scores, and tutor messages are kept exclusively in browser JavaScript runtime memory (never saved to <code>localStorage</code>, <code>sessionStorage</code>, cookies, or any backend database). Multiple-choice grading compares your selections locally in the browser against the generated answer key without calling Gemini. Because the browser-held answer key is inspectable in developer tools, scoring is for self-study feedback and is not tamper-proof. Click <strong>Reset Session</strong> at any time to clear all quiz and conversation state.
   </div>
 
   <div class="card">
@@ -252,7 +313,6 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
         <option value="Japanese">Japanese</option>
       </select>
       <button type="button" onclick="generatePracticeSet()">Generate Practice Set</button>
-      <button type="button" class="secondary" onclick="clearPracticeSet()">Reset Quiz</button>
     </div>
 
     <div id="quiz-status"></div>
@@ -264,21 +324,54 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
   </div>
 
   <div class="card">
-    <h2>2. Ephemeral Tutor Chat</h2>
+    <h2>2. Ask Tutor About Current Practice Item</h2>
+    <div class="row">
+      <label for="tutor-question-select"><strong>Selected Practice Item:</strong></label>
+      <select id="tutor-question-select" onchange="selectTutorQuestion(this.value)">
+        <option value="0">Question 1 (Generate a practice set first)</option>
+      </select>
+    </div>
     <div id="chat-box"></div>
     <div class="row">
-      <input id="chat-input" type="text" placeholder="Ask a JLPT grammar or vocabulary question..." style="flex:1;" />
-      <button type="button" onclick="sendChat()">Send</button>
-      <button type="button" class="secondary" onclick="clearChat()">Clear Memory</button>
+      <input id="chat-input" type="text" maxlength="500" placeholder="Ask for clarification, grammar comparison, or extra examples..." style="flex:1;" />
+      <button type="button" onclick="sendTutorQuestion()">Ask Tutor</button>
+      <button type="button" class="secondary" onclick="resetSession()">Reset Session</button>
     </div>
   </div>
 
   <script>
     // Ephemeral browser-memory state ONLY (never persisted to Web Storage or backend)
+    const MAX_RECENT_MESSAGES = 6;
     let currentPracticeSet = null;
     let selectedAnswers = {};
     let isQuizSubmitted = false;
+    let activeTutorQuestionIndex = 0;
     let conversationHistory = [];
+
+    function updateTutorQuestionSelector() {
+      const sel = document.getElementById('tutor-question-select');
+      sel.innerHTML = '';
+      if (!currentPracticeSet || !currentPracticeSet.questions || currentPracticeSet.questions.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '0';
+        opt.textContent = 'No active question (generate a practice set first)';
+        sel.appendChild(opt);
+        return;
+      }
+      currentPracticeSet.questions.forEach((q, idx) => {
+        const opt = document.createElement('option');
+        opt.value = String(idx);
+        opt.textContent = `Q${idx + 1}: ${q.question_text}`;
+        opt.selected = idx === activeTutorQuestionIndex;
+        sel.appendChild(opt);
+      });
+    }
+
+    function selectTutorQuestion(indexVal) {
+      activeTutorQuestionIndex = parseInt(indexVal, 10) || 0;
+      const sel = document.getElementById('tutor-question-select');
+      if (sel) sel.value = String(activeTutorQuestionIndex);
+    }
 
     async function generatePracticeSet() {
       const level = document.getElementById('level').value;
@@ -290,6 +383,7 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
       currentPracticeSet = null;
       selectedAnswers = {};
       isQuizSubmitted = false;
+      activeTutorQuestionIndex = 0;
       document.getElementById('quiz-container').innerHTML = '';
       document.getElementById('quiz-score-summary').innerHTML = '';
       document.getElementById('quiz-actions').style.display = 'none';
@@ -309,6 +403,7 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
         }
         currentPracticeSet = data;
         statusEl.textContent = `${data.content_label} — Select an answer for each question, then click Submit Answers.`;
+        updateTutorQuestionSelector();
         renderQuiz();
       } catch (err) {
         statusEl.textContent = 'Network error while generating practice set.';
@@ -393,6 +488,17 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
         aiTag.style.marginLeft = '0.5rem';
         aiTag.textContent = 'AI-Generated';
         header.appendChild(aiTag);
+
+        const askBtn = document.createElement('button');
+        askBtn.type = 'button';
+        askBtn.className = 'secondary';
+        askBtn.style.marginLeft = '0.5rem';
+        askBtn.style.fontSize = '0.8rem';
+        askBtn.style.padding = '0.2rem 0.5rem';
+        askBtn.textContent = `Focus in Tutor`;
+        askBtn.onclick = () => selectTutorQuestion(qIdx);
+        header.appendChild(askBtn);
+
         card.appendChild(header);
 
         q.options.forEach((optText, optIdx) => {
@@ -469,14 +575,27 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
       }
     }
 
-    function clearPracticeSet() {
-      currentPracticeSet = null;
-      selectedAnswers = {};
-      isQuizSubmitted = false;
-      document.getElementById('quiz-status').textContent = '';
-      document.getElementById('quiz-container').innerHTML = '';
-      document.getElementById('quiz-score-summary').innerHTML = '';
-      document.getElementById('quiz-actions').style.display = 'none';
+    function getSelectedQuestionPayload() {
+      if (
+        currentPracticeSet &&
+        currentPracticeSet.questions &&
+        currentPracticeSet.questions[activeTutorQuestionIndex]
+      ) {
+        const q = currentPracticeSet.questions[activeTutorQuestionIndex];
+        const selIdx = selectedAnswers[q.id];
+        return {
+          id: q.id,
+          question_text: q.question_text,
+          options: q.options,
+          correct_index: q.correct_index,
+          correct_answer: q.correct_answer,
+          selected_answer: typeof selIdx === 'number' ? q.options[selIdx] : null,
+          option_explanations: q.option_explanations
+        };
+      }
+      return {
+        question_text: 'General JLPT practice item inquiry'
+      };
     }
 
     function renderChat() {
@@ -492,29 +611,52 @@ BROWSER_APP_HTML = """<!DOCTYPE html>
       box.scrollTop = box.scrollHeight;
     }
 
-    async function sendChat() {
+    async function sendTutorQuestion() {
       const input = document.getElementById('chat-input');
       const message = input.value.trim();
       if (!message) return;
       const level = document.getElementById('level').value;
+      const explanation_language = document.getElementById('explanation_language').value;
+      const selectedQuestion = getSelectedQuestionPayload();
+      // Send only the single selected question and a bounded recent conversation window
+      const recentWindow = conversationHistory.slice(-MAX_RECENT_MESSAGES);
       input.value = '';
 
-      const res = await fetch('/api/tutor/chat', {
+      const res = await fetch('/api/tutor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         cache: 'no-store',
-        body: JSON.stringify({ level, message, history: conversationHistory })
+        body: JSON.stringify({
+          level,
+          explanation_language,
+          question: selectedQuestion,
+          message,
+          history: recentWindow
+        })
       });
       const data = await res.json();
       if (res.ok && data.reply) {
         conversationHistory.push({ role: 'user', content: message });
         conversationHistory.push({ role: 'assistant', content: data.reply });
+        if (conversationHistory.length > MAX_RECENT_MESSAGES) {
+          conversationHistory = conversationHistory.slice(-MAX_RECENT_MESSAGES);
+        }
         renderChat();
       }
     }
 
-    function clearChat() {
+    function resetSession() {
+      currentPracticeSet = null;
+      selectedAnswers = {};
+      isQuizSubmitted = false;
+      activeTutorQuestionIndex = 0;
       conversationHistory = [];
+      document.getElementById('quiz-status').textContent = '';
+      document.getElementById('quiz-container').innerHTML = '';
+      document.getElementById('quiz-score-summary').innerHTML = '';
+      document.getElementById('quiz-actions').style.display = 'none';
+      document.getElementById('chat-input').value = '';
+      updateTutorQuestionSelector();
       renderChat();
     }
   </script>

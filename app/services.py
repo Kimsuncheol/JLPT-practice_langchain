@@ -3,10 +3,11 @@
 Privacy & self-study guarantees:
 - No prompts, answers, generated questions, explanations, scores, conversation content,
   or API keys are ever logged or stored.
-- No database, files, or persistent memory are used.
+- No database, checkpoints, files, or persistent memory are used.
 - Ordinary multiple-choice grading is performed deterministically against the answer key
   without calling Gemini.
-- Conversation context and generated batches exist strictly in request-local scope.
+- Tutor instructions are strictly server-controlled; submitted question context and recent
+  messages are treated purely as untrusted data in request-local scope.
 - No Gemini client instantiation or network call occurs at import, startup, or health check time.
 """
 
@@ -21,9 +22,10 @@ from app.config import Settings, enforce_privacy_environment, get_settings
 from app.prompts import (
     PRACTICE_BATCH_GENERATE_PROMPT,
     PRACTICE_QUESTION_PROMPT,
-    TUTOR_CHAT_PROMPT,
+    TUTOR_ITEM_PROMPT,
 )
 from app.schemas import (
+    MAX_TUTOR_HISTORY_MESSAGES,
     AlternativeExplanation,
     AnswerEvaluationRequest,
     AnswerEvaluationResponse,
@@ -34,8 +36,11 @@ from app.schemas import (
     PracticeGenerateResponse,
     PracticeQuestionRequest,
     PracticeQuestionResponse,
+    SelectedPracticeQuestionContext,
     TutorChatRequest,
     TutorChatResponse,
+    TutorRequest,
+    TutorResponse,
     compute_stable_question_id,
 )
 
@@ -76,20 +81,62 @@ def create_chat_model(settings: Settings | None = None) -> ChatGoogleGenerativeA
     )
 
 
-def get_chat_model(settings: Settings = Depends(get_settings)) -> Any:
-    """FastAPI dependency providing the chat model (overridable in tests with a fake model)."""
-    return create_chat_model(settings)
+def get_chat_model() -> Any:
+    """FastAPI dependency hook for injecting a chat model in tests.
+
+    Returns None by default so service functions lazily instantiate
+    ChatGoogleGenerativeAI on demand.
+    """
+    return None
 
 
 def _build_request_local_history(history: list[ChatMessage]) -> list[BaseMessage]:
-    """Convert browser-supplied messages into a request-local LangChain message list."""
+    """Convert browser-supplied messages into a bounded request-local LangChain message list.
+
+    Strictly maps 'user' -> HumanMessage and 'assistant' -> AIMessage so user input
+    can never inject SystemMessage instructions.
+    """
+    bounded_window = history[-MAX_TUTOR_HISTORY_MESSAGES:]
     local_messages: list[BaseMessage] = []
-    for item in history:
+    for item in bounded_window:
         if item.role == "user":
             local_messages.append(HumanMessage(content=item.content))
-        else:
+        elif item.role == "assistant":
             local_messages.append(AIMessage(content=item.content))
+        else:
+            raise ValueError(f"Unsupported message role: {item.role}")
     return local_messages
+
+
+def _format_selected_question_data(
+    question: SelectedPracticeQuestionContext | None,
+) -> str:
+    """Serialize the single selected practice question into a bounded data block."""
+    if question is None:
+        return "No specific practice question selected."
+
+    lines = [f"Question Text: {question.question_text}"]
+    if question.options:
+        formatted_opts = ", ".join(
+            f"{idx + 1}. {opt}" for idx, opt in enumerate(question.options)
+        )
+        lines.append(f"Options: {formatted_opts}")
+    if question.correct_answer:
+        lines.append(f"Correct Answer: {question.correct_answer}")
+    elif (
+        question.correct_index is not None
+        and 0 <= question.correct_index < len(question.options)
+    ):
+        lines.append(f"Correct Answer: {question.options[question.correct_index]}")
+    if question.selected_answer:
+        lines.append(f"Learner Selected Answer: {question.selected_answer}")
+    if question.option_explanations:
+        exp_str = " | ".join(
+            f"Option {idx + 1}: {exp}"
+            for idx, exp in enumerate(question.option_explanations)
+        )
+        lines.append(f"Option Explanations: {exp_str}")
+    return "\n".join(lines)
 
 
 async def generate_practice_batch(
@@ -280,28 +327,90 @@ async def evaluate_practice_answer(
     )
 
 
+async def answer_practice_item_tutor_question(
+    payload: TutorRequest,
+    chat_model: Any = None,
+    settings: Settings | None = None,
+) -> TutorResponse:
+    """Answer a learner's question about the selected practice item in one stateless call.
+
+    Uses server-controlled system instructions, treats all submitted question/history/message
+    fields strictly as data in request-local scope, and never persists or logs content.
+    """
+    enforce_privacy_environment()
+    cfg = settings or get_settings()
+    llm = chat_model if chat_model is not None else create_chat_model(cfg)
+    chain = TUTOR_ITEM_PROMPT | llm
+
+    question_ctx = (
+        payload.question
+        if isinstance(payload.question, SelectedPracticeQuestionContext)
+        else SelectedPracticeQuestionContext(question_text=str(payload.question))
+    )
+    request_local_history = _build_request_local_history(payload.history)
+    practice_item_context = _format_selected_question_data(question_ctx)
+
+    ai_output = await asyncio.wait_for(
+        chain.ainvoke(
+            {
+                "level": payload.level.value,
+                "explanation_language": payload.explanation_language.value,
+                "practice_item_context": practice_item_context,
+                "history": request_local_history,
+                "message": payload.message,
+            }
+        ),
+        timeout=cfg.gemini_timeout_seconds,
+    )
+
+    if isinstance(ai_output, AIMessage):
+        reply_text = (
+            ai_output.content
+            if isinstance(ai_output.content, str)
+            else str(ai_output.content)
+        )
+    elif isinstance(ai_output, str):
+        reply_text = ai_output
+    elif isinstance(ai_output, dict) and "reply" in ai_output:
+        reply_text = str(ai_output["reply"])
+    else:
+        reply_text = str(getattr(ai_output, "content", ai_output))
+
+    reply_text = reply_text.strip()
+    if not reply_text:
+        raise StructuralValidationError("Tutor model returned an empty response.")
+
+    return TutorResponse(
+        level=payload.level,
+        explanation_language=payload.explanation_language,
+        question_id=question_ctx.id,
+        reply=reply_text,
+    )
+
+
 async def run_tutor_chat(
     payload: TutorChatRequest,
+    chat_model: Any = None,
     settings: Settings | None = None,
 ) -> TutorChatResponse:
     """Run a stateless tutor turn using only request-local conversation context."""
-    llm = create_chat_model(settings)
-    chain = TUTOR_CHAT_PROMPT | llm
-
-    # Strictly request-local conversation list; discarded immediately after response
-    request_local_history = _build_request_local_history(payload.history)
-
-    ai_message = await chain.ainvoke(
-        {
-            "level": payload.level.value,
-            "history": request_local_history,
-            "message": payload.message,
-        }
+    question_ctx = payload.question or SelectedPracticeQuestionContext(
+        question_text="General JLPT study question"
     )
-
-    content = (
-        ai_message.content
-        if isinstance(ai_message.content, str)
-        else str(ai_message.content)
+    tutor_req = TutorRequest(
+        level=payload.level,
+        explanation_language=payload.explanation_language,
+        question=question_ctx,
+        message=payload.message,
+        history=payload.history,
     )
-    return TutorChatResponse(level=payload.level, reply=content)
+    result = await answer_practice_item_tutor_question(
+        payload=tutor_req,
+        chat_model=chat_model,
+        settings=settings,
+    )
+    return TutorChatResponse(
+        level=result.level,
+        explanation_language=result.explanation_language,
+        reply=result.reply,
+    )

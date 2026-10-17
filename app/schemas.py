@@ -6,12 +6,14 @@ Distinguishes:
 2. Self-study local grading: answer keys are held in browser memory (inspectable by the
    learner) and compared locally without calling Gemini or persisting scores/answers.
    Scoring is explicitly for self-study and is never described as tamper-proof.
+3. Server-controlled tutor validation: strictly bounds message roles ('user', 'assistant' only),
+   message lengths, recent history window size, and selected practice question context.
 """
 
 import hashlib
 import re
 from enum import Enum
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 from pydantic import (
     AliasChoices,
     BaseModel,
@@ -23,6 +25,9 @@ from pydantic import (
 
 # Regex matching at least one Hiragana, Katakana, or CJK Unified Ideograph (Kanji) character
 JAPANESE_SCRIPT_PATTERN = re.compile(r"[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF]")
+
+MAX_TUTOR_HISTORY_MESSAGES = 6
+MAX_TUTOR_MESSAGE_LENGTH = 500
 
 STRUCTURAL_VS_LINGUISTIC_DISCLAIMER = (
     "Structural validation passed (schema, Japanese script presence, 4 distinct options, "
@@ -65,11 +70,25 @@ class GenerationCategory(str, Enum):
 
 
 class ExplanationLanguage(str, Enum):
-    """Supported languages for option explanations."""
+    """Supported languages for option and tutor explanations."""
 
     ENGLISH = "English"
     KOREAN = "Korean"
     JAPANESE = "Japanese"
+
+
+def _normalize_explanation_language_value(value: object) -> object:
+    if isinstance(value, str):
+        mapping = {
+            "english": "English",
+            "en": "English",
+            "korean": "Korean",
+            "ko": "Korean",
+            "japanese": "Japanese",
+            "ja": "Japanese",
+        }
+        return mapping.get(value.strip().lower(), value)
+    return value
 
 
 def compute_stable_question_id(
@@ -117,17 +136,7 @@ class PracticeGenerateRequest(BaseModel):
     @field_validator("explanation_language", mode="before")
     @classmethod
     def normalize_explanation_language(cls, value: object) -> object:
-        if isinstance(value, str):
-            mapping = {
-                "english": "English",
-                "en": "English",
-                "korean": "Korean",
-                "ko": "Korean",
-                "japanese": "Japanese",
-                "ja": "Japanese",
-            }
-            return mapping.get(value.strip().lower(), value)
-        return value
+        return _normalize_explanation_language_value(value)
 
 
 class LLMGeneratedQuestionItem(BaseModel):
@@ -363,14 +372,129 @@ class AnswerEvaluationResponse(BaseModel):
 
 
 class ChatMessage(BaseModel):
-    """Single message in an ephemeral, browser-maintained conversation history."""
+    """Single message in an ephemeral, browser-maintained conversation window.
+
+    Server-side role validation strictly permits only 'user' and 'assistant'
+    (rejecting 'system', 'developer', or 'tool' roles to prevent prompt injection).
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
     role: Literal["user", "assistant"] = Field(
-        ..., description="Speaker role in the conversation."
+        ...,
+        description="Speaker role ('user' or 'assistant' only; 'system' is forbidden).",
     )
     content: str = Field(
-        ..., min_length=1, max_length=2000, description="Message text content."
+        ...,
+        min_length=1,
+        max_length=MAX_TUTOR_MESSAGE_LENGTH,
+        description="Bounded message text content (1 to 500 characters).",
     )
+
+
+class SelectedPracticeQuestionContext(BaseModel):
+    """Bounded context for the single selected practice item sent to POST /api/tutor."""
+
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
+
+    id: Optional[str] = Field(default=None, max_length=80)
+    question_text: str = Field(
+        ...,
+        min_length=1,
+        max_length=500,
+        validation_alias=AliasChoices("question_text", "question"),
+        description="Japanese text of the selected practice question.",
+    )
+    options: list[str] = Field(
+        default_factory=list,
+        max_length=4,
+        description="Up to 4 options for the selected question.",
+    )
+    correct_index: Optional[int] = Field(default=None, ge=0, le=3)
+    correct_answer: Optional[str] = Field(default=None, max_length=200)
+    selected_answer: Optional[str] = Field(default=None, max_length=200)
+    option_explanations: list[str] = Field(
+        default_factory=list,
+        max_length=4,
+        description="Per-option explanations for the selected question.",
+    )
+
+    @field_validator("options")
+    @classmethod
+    def bound_option_lengths(cls, value: list[str]) -> list[str]:
+        for opt in value:
+            if len(opt) > 200:
+                raise ValueError("Each option must be at most 200 characters.")
+        return value
+
+    @field_validator("option_explanations")
+    @classmethod
+    def bound_explanation_lengths(cls, value: list[str]) -> list[str]:
+        for exp in value:
+            if len(exp) > 500:
+                raise ValueError("Each option explanation must be at most 500 characters.")
+        return value
+
+
+class TutorRequest(BaseModel):
+    """Bounded, stateless request for POST /api/tutor about the current practice item."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    level: JLPTLevel = Field(
+        default=JLPTLevel.N5, description="Target JLPT level (N5-N1)."
+    )
+    explanation_language: ExplanationLanguage = Field(
+        default=ExplanationLanguage.ENGLISH,
+        description="Explanation language: English, Korean, or Japanese.",
+    )
+    question: Union[SelectedPracticeQuestionContext, str] = Field(
+        ...,
+        validation_alias=AliasChoices("question", "current_question", "practice_item"),
+        description="The single selected practice item (structured object or question text).",
+    )
+    message: str = Field(
+        ...,
+        min_length=1,
+        max_length=MAX_TUTOR_MESSAGE_LENGTH,
+        validation_alias=AliasChoices("message", "user_message", "query"),
+        description="Learner's question about the selected practice item (1-500 chars).",
+    )
+    history: list[ChatMessage] = Field(
+        default_factory=list,
+        max_length=MAX_TUTOR_HISTORY_MESSAGES,
+        validation_alias=AliasChoices("history", "recent_messages", "messages"),
+        description="Bounded recent conversation window from browser memory (max 6 messages).",
+    )
+
+    @field_validator("explanation_language", mode="before")
+    @classmethod
+    def normalize_language(cls, value: object) -> object:
+        return _normalize_explanation_language_value(value)
+
+    @field_validator("question", mode="after")
+    @classmethod
+    def normalize_question_context(
+        cls, value: Union[SelectedPracticeQuestionContext, str]
+    ) -> SelectedPracticeQuestionContext:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned or len(cleaned) > 500:
+                raise ValueError(
+                    "Question text must be between 1 and 500 characters."
+                )
+            return SelectedPracticeQuestionContext(question_text=cleaned)
+        return value
+
+
+class TutorResponse(BaseModel):
+    """Stateless tutor response for POST /api/tutor."""
+
+    level: JLPTLevel
+    explanation_language: ExplanationLanguage
+    question_id: Optional[str] = None
+    reply: str
+    ai_generated: Literal[True] = True
 
 
 class PracticeQuestionRequest(BaseModel):
@@ -411,20 +535,37 @@ class TutorChatRequest(BaseModel):
     """Stateless tutor request carrying ephemeral history from browser memory."""
 
     level: JLPTLevel = Field(default=JLPTLevel.N5, description="Learner's JLPT level.")
+    explanation_language: ExplanationLanguage = Field(
+        default=ExplanationLanguage.ENGLISH,
+        description="Explanation language: English, Korean, or Japanese.",
+    )
+    question: Optional[Union[SelectedPracticeQuestionContext, str]] = Field(
+        default=None,
+        validation_alias=AliasChoices("question", "current_question", "practice_item"),
+    )
     message: str = Field(
-        ..., min_length=1, max_length=2000, description="Current learner question."
+        ...,
+        min_length=1,
+        max_length=MAX_TUTOR_MESSAGE_LENGTH,
+        description="Current learner question.",
     )
     history: list[ChatMessage] = Field(
         default_factory=list,
-        max_length=20,
-        description="Ephemeral conversation context held only in browser and request-local memory.",
+        max_length=MAX_TUTOR_HISTORY_MESSAGES,
+        description="Bounded recent conversation window held only in browser and request-local memory.",
     )
+
+    @field_validator("explanation_language", mode="before")
+    @classmethod
+    def normalize_language(cls, value: object) -> object:
+        return _normalize_explanation_language_value(value)
 
 
 class TutorChatResponse(BaseModel):
     """Stateless tutor reply."""
 
     level: JLPTLevel
+    explanation_language: ExplanationLanguage = ExplanationLanguage.ENGLISH
     reply: str
 
 

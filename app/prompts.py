@@ -1,4 +1,4 @@
-"""LangChain prompt templates for JLPT practice generation, evaluation, and tutoring.
+"""LangChain prompt templates for JLPT practice generation and tutoring with Ollama.
 
 Security & Prompt-Injection Defense:
 All tutor system instructions are strictly server-controlled. User-submitted practice item
@@ -35,7 +35,10 @@ PRACTICE_BATCH_GENERATE_PROMPT = ChatPromptTemplate.from_messages(
                 "7. Explanations for Every Option: 'option_explanations' must contain 4 strings corresponding "
                 "to options[0], options[1], options[2], and options[3], written in {explanation_language}, "
                 "explaining why the correct option is right, why each distractor is incorrect, and (for reading) "
-                "quoting the supporting sentence from the passage."
+                "quoting the supporting sentence from the passage.\n"
+                "8. Output Format: Respond with valid JSON matching the schema "
+                "{{'passage': string|null, 'questions': [{{'question_text': string, 'options': [string, string, string, string], "
+                "'correct_index': 0..3, 'option_explanations': [string, string, string, string], 'supporting_sentence': string|null}}]}}."
             ),
         ),
         (

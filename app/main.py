@@ -1,13 +1,17 @@
-"""FastAPI entrypoint for the privacy-first JLPT Practice & Tutor application."""
+"""FastAPI entrypoint for the privacy-first JLPT Practice & Tutor application (Ollama backend)."""
 
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI, Request, Response, status
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.config import enforce_privacy_environment, get_settings
 from app.routes import router
-from app.services import MissingCredentialsError
+from app.services import OllamaUnavailableError
+
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 @asynccontextmanager
@@ -15,7 +19,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Application lifespan hook.
 
     Enforces privacy environment settings on startup without making any
-    network or Gemini API calls.
+    network or Ollama API calls.
     """
     enforce_privacy_environment()
     yield
@@ -31,16 +35,16 @@ def create_app() -> FastAPI:
         version="0.1.0",
         description=(
             "Stateless JLPT practice and tutor API powered by FastAPI, Pydantic, "
-            "and langchain-google-genai with strict privacy guarantees."
+            "and langchain-ollama (ChatOllama) with strict privacy guarantees."
         ),
         lifespan=lifespan,
     )
 
-    @application.exception_handler(MissingCredentialsError)
-    async def missing_credentials_handler(
-        _: Request, exc: MissingCredentialsError
+    @application.exception_handler(OllamaUnavailableError)
+    async def ollama_unavailable_handler(
+        _: Request, exc: OllamaUnavailableError
     ) -> JSONResponse:
-        """Handle missing backend Gemini credentials with 503 and Cache-Control: no-store."""
+        """Handle unreachable/misconfigured Ollama endpoint with 503 and Cache-Control: no-store."""
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"detail": str(exc)},
@@ -54,7 +58,7 @@ def create_app() -> FastAPI:
     ) -> Response:
         """Enforce bounded input size and guarantee Cache-Control: no-store on practice/tutor routes."""
         path = request.url.path
-        is_sensitive_route = "/practice" in path or "/tutor" in path
+        is_sensitive_route = "/practice" in path or "/tutor" in path or path == "/"
 
         if request.method in {"POST", "PUT", "PATCH"}:
             body = await request.body()
@@ -75,6 +79,11 @@ def create_app() -> FastAPI:
             response.headers["Cache-Control"] = "no-store"
             response.headers["Pragma"] = "no-cache"
         return response
+
+    if STATIC_DIR.is_dir():
+        application.mount(
+            "/static", StaticFiles(directory=str(STATIC_DIR)), name="static"
+        )
 
     application.include_router(router)
     return application

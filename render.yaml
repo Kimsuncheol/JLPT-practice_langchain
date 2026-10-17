@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: jlpt-practice-langchain
+    runtime: python
+    plan: free
+    buildCommand: pip install --no-cache-dir -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /health
+    envVars:
+      # Render Free cannot host an Ollama model or reach a developer's Mac localhost.
+      # Supply a separately hosted, reachable HTTPS Ollama endpoint URL manually.
+      - key: OLLAMA_BASE_URL
+        sync: false
+      - key: OLLAMA_MODEL
+        value: qwen2.5:7b
+      # Server-side credential for authenticating to the remote Ollama endpoint
+      - key: OLLAMA_API_KEY
+        sync: false
+      - key: LANGCHAIN_TRACING_V2
+        value: "false"
+      - key: LANGCHAIN_TRACING
+        value: "false"
+      - key: LANGSMITH_TRACING
+        value: "false"

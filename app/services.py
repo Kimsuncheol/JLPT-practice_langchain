@@ -1,27 +1,33 @@
-"""Stateless AI services using langchain-google-genai and local multiple-choice grading.
+"""Stateless AI services using langchain-ollama (ChatOllama) and local multiple-choice grading.
 
 Privacy & self-study guarantees:
 - No prompts, answers, generated questions, passages, explanations, scores, conversation
-  content, or API keys are ever logged or stored.
+  content, or credentials are ever logged or stored.
 - No database, checkpoints, files, or persistent memory are used.
 - Ordinary multiple-choice grading is performed deterministically against the answer key
-  without calling Gemini.
+  without calling Ollama.
 - Difficulty is labeled as approximate and all material as unofficial AI practice; practice
   accuracy never claims to predict an official JLPT score.
 - Tutor instructions are strictly server-controlled; submitted question context and recent
   messages are treated purely as untrusted data in request-local scope.
-- No Gemini client instantiation or network call occurs at import, startup, or health check time.
+- No Ollama client instantiation or network call occurs at import, startup, or health check time.
 """
 
 import asyncio
+import json
 import re
 from typing import Any
-from fastapi import Depends
+import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_ollama import ChatOllama
 from pydantic import ValidationError
 
-from app.config import Settings, enforce_privacy_environment, get_settings
+from app.config import (
+    Settings,
+    enforce_privacy_environment,
+    get_settings,
+    is_localhost_url,
+)
 from app.prompts import (
     PRACTICE_BATCH_GENERATE_PROMPT,
     PRACTICE_QUESTION_PROMPT,
@@ -52,9 +58,23 @@ from app.schemas import (
     compute_stable_question_id,
 )
 
+JSON_FENCE_PATTERN = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
-class MissingCredentialsError(RuntimeError):
-    """Raised when GEMINI_API_KEY is not configured on the backend."""
+
+class OllamaUnavailableError(RuntimeError):
+    """Raised when the Ollama endpoint is unreachable, misconfigured, or the model is not pulled."""
+
+
+# Alias for backward compatibility in exception handlers
+MissingCredentialsError = OllamaUnavailableError
+
+
+class UnsupportedStructuredOutputError(ValueError):
+    """Raised when the selected Ollama model does not support structured output or valid JSON."""
+
+
+class QuotaExceededError(RuntimeError):
+    """Raised when a remote Ollama gateway returns a 429 rate-limit / quota error."""
 
 
 class StructuralValidationError(ValueError):
@@ -67,34 +87,123 @@ class StructuralValidationError(ValueError):
     """
 
 
-def create_chat_model(settings: Settings | None = None) -> ChatGoogleGenerativeAI:
-    """Instantiate ChatGoogleGenerativeAI lazily for a single request with bounded parameters.
+def is_quota_or_rate_limit_error(exc: BaseException) -> bool:
+    """Detect quota / 429 rate-limit errors without logging exception payloads."""
+    if isinstance(exc, QuotaExceededError):
+        return True
+    cls_name = type(exc).__name__.lower()
+    if any(
+        token in cls_name
+        for token in ("resourceexhausted", "quota", "ratelimit", "toomanyrequests")
+    ):
+        return True
+    status_code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if status_code == 429:
+        return True
+    msg = str(exc).lower()
+    return any(
+        token in msg
+        for token in ("429", "resource_exhausted", "quota", "rate limit", "rate_limit")
+    )
+
+
+def is_timeout_error(exc: BaseException) -> bool:
+    """Return True if the exception represents an async or HTTP timeout."""
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException)):
+        return True
+    cls_name = type(exc).__name__.lower()
+    return "timeout" in cls_name or "timed out" in str(exc).lower()
+
+
+def is_model_unavailable_error(exc: BaseException) -> bool:
+    """Return True if the exception indicates Ollama is unreachable or the model is missing."""
+    if isinstance(
+        exc,
+        (
+            OllamaUnavailableError,
+            httpx.ConnectError,
+            httpx.NetworkError,
+            ConnectionError,
+            OSError,
+        ),
+    ):
+        return True
+    status_code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if status_code in {404, 502, 503}:
+        return True
+    msg = str(exc).lower()
+    return any(
+        token in msg
+        for token in (
+            "connection refused",
+            "failed to connect",
+            "connecterror",
+            "not found",
+            "try pulling it first",
+            "model",
+            "unreachable",
+            "503",
+        )
+    )
+
+
+def is_unsupported_structured_output_error(exc: BaseException) -> bool:
+    """Return True if the exception indicates the model does not support structured output."""
+    if isinstance(exc, (UnsupportedStructuredOutputError, NotImplementedError)):
+        return True
+    msg = str(exc).lower()
+    return any(
+        token in msg
+        for token in (
+            "structured output",
+            "with_structured_output",
+            "does not support tools",
+            "does not support json",
+            "schema",
+            "notimplemented",
+        )
+    )
+
+
+def create_chat_model(settings: Settings | None = None) -> ChatOllama:
+    """Instantiate ChatOllama lazily for a single request with bounded parameters.
 
     Never called during application startup, /health checks, or multiple-choice grading.
     """
     enforce_privacy_environment()
     cfg = settings or get_settings()
-    api_key = cfg.gemini_api_key.get_secret_value().strip()
-    if not api_key or api_key == "your_gemini_api_key_here":
-        raise MissingCredentialsError(
-            "GEMINI_API_KEY is not configured on the backend."
+    base_url = cfg.ollama_base_url.strip()
+    model_name = cfg.ollama_model.strip()
+
+    if not base_url or not model_name:
+        raise OllamaUnavailableError(
+            "OLLAMA_BASE_URL and OLLAMA_MODEL must be configured on the backend."
         )
 
-    return ChatGoogleGenerativeAI(
-        model=cfg.gemini_model,
-        google_api_key=api_key,
-        temperature=cfg.gemini_temperature,
-        max_output_tokens=cfg.gemini_max_output_tokens,
-        timeout=cfg.gemini_timeout_seconds,
-        max_retries=cfg.gemini_max_retries,
+    if cfg.render_environment and is_localhost_url(base_url):
+        raise OllamaUnavailableError(
+            "Render Free cannot host an Ollama model or access localhost. "
+            "Configure OLLAMA_BASE_URL to a separately hosted, reachable HTTPS Ollama endpoint."
+        )
+
+    client_kwargs: dict[str, Any] = {"timeout": cfg.ollama_timeout_seconds}
+    api_key = cfg.ollama_api_key.get_secret_value().strip()
+    if api_key:
+        client_kwargs["headers"] = {"Authorization": f"Bearer {api_key}"}
+
+    return ChatOllama(
+        model=model_name,
+        base_url=base_url,
+        temperature=cfg.ollama_temperature,
+        num_predict=cfg.ollama_num_predict,
+        client_kwargs=client_kwargs,
     )
 
 
 def get_chat_model() -> Any:
     """FastAPI dependency hook for injecting a chat model in tests.
 
-    Returns None by default so service functions lazily instantiate
-    ChatGoogleGenerativeAI on demand.
+    Returns None by default so service functions lazily instantiate ChatOllama on demand.
     """
     return None
 
@@ -160,7 +269,6 @@ def _resolve_reading_supporting_sentence(
     candidate = (item.supporting_sentence or "").strip()
 
     if not candidate:
-        # Try to find a passage sentence already quoted inside option_explanations
         passage_sentences = [
             s.strip()
             for s in re.split(r"[。！？\n]+", passage)
@@ -195,6 +303,97 @@ def _resolve_reading_supporting_sentence(
     return candidate, enriched_explanations
 
 
+def _parse_llm_batch_output(raw_batch: Any) -> LLMPracticeBatchOutput:
+    """Validate structured or JSON-string model output into LLMPracticeBatchOutput."""
+    if raw_batch is None:
+        raise UnsupportedStructuredOutputError(
+            "Selected Ollama model returned empty structured output."
+        )
+    if isinstance(raw_batch, LLMPracticeBatchOutput):
+        return raw_batch
+
+    text_content: str | None = None
+    if isinstance(raw_batch, AIMessage) and isinstance(raw_batch.content, str):
+        text_content = raw_batch.content.strip()
+    elif isinstance(raw_batch, str):
+        text_content = raw_batch.strip()
+
+    if text_content is not None:
+        fence_match = JSON_FENCE_PATTERN.search(text_content)
+        if fence_match:
+            text_content = fence_match.group(1).strip()
+        try:
+            parsed_json = json.loads(text_content)
+        except json.JSONDecodeError as exc:
+            raise StructuralValidationError(
+                "Model output is not valid JSON and failed structural validation."
+            ) from exc
+        return LLMPracticeBatchOutput.model_validate(parsed_json)
+
+    return LLMPracticeBatchOutput.model_validate(raw_batch)
+
+
+async def _invoke_batch_generation_chain(
+    llm: Any,
+    prompt_vars: dict[str, Any],
+    timeout_seconds: float,
+) -> Any:
+    """Invoke structured output where supported by the Ollama model, with fallback handling."""
+    if hasattr(llm, "with_structured_output"):
+        try:
+            structured_llm = llm.with_structured_output(LLMPracticeBatchOutput)
+            chain = PRACTICE_BATCH_GENERATE_PROMPT | structured_llm
+            result = await asyncio.wait_for(
+                chain.ainvoke(prompt_vars),
+                timeout=timeout_seconds,
+            )
+            if result is not None:
+                return result
+        except Exception as exc:
+            if is_timeout_error(exc):
+                raise asyncio.TimeoutError("Ollama generation timed out.") from None
+            if is_quota_or_rate_limit_error(exc):
+                raise QuotaExceededError(
+                    "Ollama endpoint rate limit exceeded. Please wait and try again."
+                ) from None
+            if is_unsupported_structured_output_error(exc):
+                # If the model also supports raw invocation, try raw JSON fallback; otherwise raise
+                if not hasattr(llm, "ainvoke") and not callable(llm):
+                    raise UnsupportedStructuredOutputError(
+                        "The selected Ollama model does not support structured output."
+                    ) from None
+            elif is_model_unavailable_error(exc):
+                raise OllamaUnavailableError(
+                    "Ollama service or selected model is unavailable."
+                ) from None
+            else:
+                raise
+
+    # Fallback for models that do not implement or support native structured output
+    try:
+        fallback_chain = PRACTICE_BATCH_GENERATE_PROMPT | llm
+        return await asyncio.wait_for(
+            fallback_chain.ainvoke(prompt_vars),
+            timeout=timeout_seconds,
+        )
+    except Exception as exc:
+        if is_timeout_error(exc):
+            raise asyncio.TimeoutError("Ollama generation timed out.") from None
+        if is_quota_or_rate_limit_error(exc):
+            raise QuotaExceededError(
+                "Ollama endpoint rate limit exceeded. Please wait and try again."
+            ) from None
+        if is_unsupported_structured_output_error(exc):
+            raise UnsupportedStructuredOutputError(
+                "The selected Ollama model does not support structured output."
+            ) from None
+        if is_model_unavailable_error(exc):
+            raise OllamaUnavailableError(
+                "Ollama service or selected model is unavailable."
+            ) from None
+        raise
+
+
 async def generate_practice_batch(
     payload: PracticeGenerateRequest,
     chat_model: Any = None,
@@ -202,43 +401,31 @@ async def generate_practice_batch(
 ) -> PracticeGenerateResponse:
     """Generate JLPT vocabulary, grammar, or reading practice items in a single async LangChain call.
 
-    Uses Pydantic structured output, enforces timeout and structural validation,
-    assigns deterministic stable IDs, and labels all material as unofficial AI practice
-    with approximate difficulty. Never logs or persists requests or generated questions.
+    Uses ChatOllama structured output where supported, enforces timeout and Pydantic
+    structural validation, assigns deterministic stable IDs, and labels all material
+    as unofficial AI practice with approximate difficulty.
     """
     enforce_privacy_environment()
     cfg = settings or get_settings()
     llm = chat_model if chat_model is not None else create_chat_model(cfg)
 
-    if hasattr(llm, "with_structured_output"):
-        structured_llm = llm.with_structured_output(LLMPracticeBatchOutput)
-    else:
-        structured_llm = llm
+    prompt_vars = {
+        "level": payload.level.value,
+        "category": payload.category.value,
+        "question_count": payload.question_count,
+        "explanation_language": payload.explanation_language.value,
+    }
 
-    chain = PRACTICE_BATCH_GENERATE_PROMPT | structured_llm
-
-    # Single async generation call per batch, bounded by configured timeout
-    raw_batch = await asyncio.wait_for(
-        chain.ainvoke(
-            {
-                "level": payload.level.value,
-                "category": payload.category.value,
-                "question_count": payload.question_count,
-                "explanation_language": payload.explanation_language.value,
-            }
-        ),
-        timeout=cfg.gemini_timeout_seconds,
+    raw_batch = await _invoke_batch_generation_chain(
+        llm=llm,
+        prompt_vars=prompt_vars,
+        timeout_seconds=cfg.ollama_timeout_seconds,
     )
 
     try:
-        if isinstance(raw_batch, LLMPracticeBatchOutput):
-            parsed_batch = raw_batch
-        elif isinstance(raw_batch, AIMessage) and isinstance(raw_batch.content, str):
-            parsed_batch = LLMPracticeBatchOutput.model_validate_json(raw_batch.content)
-        elif isinstance(raw_batch, str):
-            parsed_batch = LLMPracticeBatchOutput.model_validate_json(raw_batch)
-        else:
-            parsed_batch = LLMPracticeBatchOutput.model_validate(raw_batch)
+        parsed_batch = _parse_llm_batch_output(raw_batch)
+    except UnsupportedStructuredOutputError:
+        raise
     except ValidationError as exc:
         raise StructuralValidationError(
             "Model output failed structural schema validation."
@@ -345,7 +532,7 @@ async def evaluate_practice_answer(
 ) -> AnswerEvaluationResponse:
     """Compare a learner's selected multiple-choice answer locally against the answer key.
 
-    Does NOT call Gemini or persist any answers, explanations, or scores.
+    Does NOT call Ollama or persist any answers, explanations, or scores.
     """
     _ = settings
     enforce_privacy_environment()
@@ -438,18 +625,33 @@ async def answer_practice_item_tutor_question(
     request_local_history = _build_request_local_history(payload.history)
     practice_item_context = _format_selected_question_data(question_ctx)
 
-    ai_output = await asyncio.wait_for(
-        chain.ainvoke(
-            {
-                "level": payload.level.value,
-                "explanation_language": payload.explanation_language.value,
-                "practice_item_context": practice_item_context,
-                "history": request_local_history,
-                "message": payload.message,
-            }
-        ),
-        timeout=cfg.gemini_timeout_seconds,
-    )
+    try:
+        ai_output = await asyncio.wait_for(
+            chain.ainvoke(
+                {
+                    "level": payload.level.value,
+                    "explanation_language": payload.explanation_language.value,
+                    "practice_item_context": practice_item_context,
+                    "history": request_local_history,
+                    "message": payload.message,
+                }
+            ),
+            timeout=cfg.ollama_timeout_seconds,
+        )
+    except (asyncio.TimeoutError, OllamaUnavailableError, StructuralValidationError):
+        raise
+    except Exception as exc:
+        if is_timeout_error(exc):
+            raise asyncio.TimeoutError("Ollama tutor request timed out.") from None
+        if is_quota_or_rate_limit_error(exc):
+            raise QuotaExceededError(
+                "Ollama endpoint rate limit exceeded. Please wait and try again."
+            ) from None
+        if is_model_unavailable_error(exc):
+            raise OllamaUnavailableError(
+                "Ollama service or selected model is unavailable."
+            ) from None
+        raise
 
     if isinstance(ai_output, AIMessage):
         reply_text = (

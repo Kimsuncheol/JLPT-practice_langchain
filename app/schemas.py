@@ -4,7 +4,7 @@ Distinguishes:
 1. Structural validation (enforced deterministically by Pydantic validators) vs.
    linguistic correctness (not guaranteed for AI-generated content).
 2. Self-study local grading: answer keys are held in browser memory (inspectable by the
-   learner) and compared locally without calling Gemini or persisting scores/answers.
+   learner) and compared locally without calling Ollama or persisting scores/answers.
    Scoring is explicitly for self-study, is never described as tamper-proof, and does not
    predict an official JLPT score.
 3. Unofficial AI practice & approximate difficulty: all generated material is labeled as
@@ -43,7 +43,7 @@ STRUCTURAL_VS_LINGUISTIC_DISCLAIMER = (
 
 SELF_STUDY_GRADING_NOTICE = (
     "Self-study mode: The answer key is held in browser memory and compared locally without "
-    "calling Gemini or storing scores. Because a browser-held answer key is inspectable, "
+    "calling the Ollama model or storing scores. Because a browser-held answer key is inspectable, "
     "this scoring is for self-study feedback only, is not tamper-proof, and does not "
     "predict an official JLPT score."
 )
@@ -437,7 +437,7 @@ class AlternativeExplanation(BaseModel):
 
 
 class AnswerEvaluationRequest(BaseModel):
-    """Request payload for deterministic, non-Gemini multiple-choice answer evaluation."""
+    """Request payload for deterministic, non-LLM multiple-choice answer evaluation."""
 
     level: JLPTLevel = Field(default=JLPTLevel.N5)
     question: str = Field(..., min_length=1, max_length=2000)
@@ -452,7 +452,7 @@ class AnswerEvaluationRequest(BaseModel):
 
 
 class AnswerEvaluationResponse(BaseModel):
-    """Local/deterministic feedback for a submitted multiple-choice answer (no Gemini call)."""
+    """Local/deterministic feedback for a submitted multiple-choice answer (no LLM call)."""
 
     is_correct: bool
     selected_answer: str = ""
@@ -673,9 +673,10 @@ class TutorChatResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    """Health check response verifying service readiness without calling Gemini."""
+    """Health check response verifying service readiness without calling Ollama."""
 
     status: Literal["ok"] = "ok"
     model: str
+    base_url_configured: bool = True
     tracing_disabled: bool
     persistence: Literal["none"] = "none"

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ app_name }} — Unofficial AI Self-Study (Ollama)</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <style>
+{% include "styles.css" %}
+  </style>
+</head>
+<body>
+  <header class="top-bar">
+    <h1>
+      {{ app_name }}
+      <span class="badge">Unofficial AI Practice / Approximate Difficulty (Ollama: {{ ollama_model }})</span>
+    </h1>
+    <button type="button" id="reset-session-btn" class="danger" onclick="resetSession()" aria-label="Reset session and clear all quiz and conversation state">
+      Reset Session
+    </button>
+  </header>
+
+  <section class="notice" aria-label="Privacy, Cold-Start, and Ollama Endpoint Notice">
+    <strong>Privacy &amp; Ephemeral Study Notice:</strong>
+    This application <strong>does not save conversations, quizzes, answers, explanations, or scores</strong> in any database, file, log, or tracing system. All study state is held exclusively in browser JavaScript memory (no <code>localStorage</code>, <code>IndexedDB</code>, conversation cookies, or server-side persistence) and is cleared when you refresh the page or click <strong>Reset Session</strong>. Practice generation and tutor follow-up requests are processed statelessly by the configured <strong>Ollama</strong> model (<code>{{ ollama_model }}</code>) via <code>langchain-ollama</code>; ordinary multiple-choice answer grading runs locally in browser memory without calling Ollama. All content is unofficial AI practice with approximate JLPT difficulty, and practice accuracy does not predict an official JLPT score.<br />
+    <strong>Cold-Start &amp; Remote Ollama Notice (Render Free):</strong> On Render Free hosting, the web service spins down after 15 minutes of inactivity and cannot host an LLM or access your local machine's <code>localhost</code>; it connects to a separately hosted, reachable Ollama endpoint configured on the backend. The first request after an idle period may take 30–60 seconds while the container cold-starts and the Ollama model loads into memory.
+  </section>
+
+  <main class="layout-grid">
+    <div>
+      <section class="card" aria-labelledby="quiz-heading">
+        <h2 id="quiz-heading">1. JLPT Practice Quiz (Vocabulary, Grammar &amp; Reading)</h2>
+        <div class="row" role="group" aria-label="Practice set configuration">
+          <div class="form-field">
+            <label for="level">JLPT Level</label>
+            <select id="level" aria-label="JLPT Level">
+              {% for lvl in levels %}
+              <option value="{{ lvl }}">{{ lvl }} (Approx.)</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="form-field">
+            <label for="category">Category</label>
+            <select id="category" aria-label="Practice Category" onchange="syncQuestionCountLimit()">
+              {% for cat in categories %}
+              <option value="{{ cat.value }}">{{ cat.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="form-field">
+            <label for="question_count">Questions</label>
+            <select id="question_count" aria-label="Question Count">
+              <option value="1">1 Question</option>
+              <option value="2">2 Questions</option>
+              <option value="3">3 Questions</option>
+              <option value="4">4 Questions</option>
+              <option value="5">5 Questions</option>
+            </select>
+          </div>
+
+          <div class="form-field">
+            <label for="explanation_language">Explanation Language</label>
+            <select id="explanation_language" aria-label="Explanation Language">
+              {% for lang in languages %}
+              <option value="{{ lang }}">{{ lang }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="form-field" style="justify-content: flex-end;">
+            <label>&nbsp;</label>
+            <button type="button" id="generate-btn" onclick="generatePracticeSet()">Generate Practice Set</button>
+          </div>
+        </div>
+
+        <div id="quiz-status" class="status-banner" role="status" aria-live="polite" style="display: none;"></div>
+        <div id="quiz-error" class="error-banner" role="alert" aria-live="assertive" style="display: none;"></div>
+
+        <div id="quiz-container" aria-live="polite"></div>
+
+        <div id="quiz-actions" class="row" style="margin-top: 1rem; display: none;">
+          <button type="button" id="submit-quiz-btn" onclick="submitQuizLocally()">Submit Answers</button>
+        </div>
+
+        <div id="quiz-score-summary" aria-live="polite"></div>
+      </section>
+    </div>
+
+    <div>
+      <section class="card" aria-labelledby="summary-heading">
+        <h2 id="summary-heading">2. Session Summary (In-Memory Only)</h2>
+        <div class="summary-stats">
+          <div class="stat-box">
+            <div class="stat-label">Session Accuracy</div>
+            <div class="stat-value" id="session-accuracy-value">—</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">Correct / Answered</div>
+            <div class="stat-value" id="session-count-value">0 / 0</div>
+          </div>
+        </div>
+        <div>
+          <strong style="font-size: 0.9rem;">Missed Topics &amp; Questions:</strong>
+          <div id="session-missed-topics" aria-live="polite">
+            <p style="margin: 0; font-size: 0.9rem; color: #475569;">No missed questions in this session.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="tutor-heading">
+        <h2 id="tutor-heading">3. Tutor Follow-Ups (Current Practice Item)</h2>
+        <div class="row">
+          <label for="tutor-question-select"><strong>Selected Item:</strong></label>
+          <select id="tutor-question-select" onchange="selectTutorQuestion(this.value)" style="flex: 1;">
+            <option value="0">No active question (generate a practice set first)</option>
+          </select>
+        </div>
+
+        <div class="row" aria-label="Quick tutor follow-up prompts">
+          <button type="button" class="chip" onclick="prefillTutorPrompt('Can you clarify why the correct option fits best here?')">Clarify Answer</button>
+          <button type="button" class="chip" onclick="prefillTutorPrompt('Compare the grammar or nuance between the options.')">Compare Nuance</button>
+          <button type="button" class="chip" onclick="prefillTutorPrompt('Give 2 additional example sentences at this JLPT level.')">More Examples</button>
+        </div>
+
+        <div id="tutor-status" class="status-banner" role="status" aria-live="polite" style="display: none;"></div>
+        <div id="tutor-error" class="error-banner" role="alert" aria-live="assertive" style="display: none;"></div>
+
+        <div id="chat-box" role="log" aria-live="polite" aria-label="Tutor conversation messages"></div>
+
+        <form class="row" onsubmit="event.preventDefault(); sendTutorQuestion();" style="margin-bottom: 0;">
+          <label for="chat-input" style="position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0);">Ask the tutor a question</label>
+          <input id="chat-input" type="text" maxlength="500" placeholder="Ask for clarification, grammar comparison, or extra examples..." style="flex:1;" />
+          <button type="submit" id="tutor-send-btn">Ask Tutor</button>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <script>
+{% include "app.js" %}
+  </script>
+</body>
+</html>

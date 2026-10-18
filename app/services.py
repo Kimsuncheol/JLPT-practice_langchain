@@ -30,6 +30,7 @@ from app.config import (
 )
 from app.prompts import (
     PRACTICE_BATCH_GENERATE_PROMPT,
+    PRACTICE_FOLLOW_UP_PROMPT,
     PRACTICE_QUESTION_PROMPT,
     TUTOR_ITEM_PROMPT,
 )
@@ -42,10 +43,13 @@ from app.schemas import (
     AnswerEvaluationRequest,
     AnswerEvaluationResponse,
     ChatMessage,
+    FollowUpDifficulty,
     GeneratedPracticeQuestion,
     GenerationCategory,
     LLMGeneratedQuestionItem,
     LLMPracticeBatchOutput,
+    PracticeFollowUpRequest,
+    PracticeFollowUpResponse,
     PracticeGenerateRequest,
     PracticeGenerateResponse,
     PracticeQuestionRequest,
@@ -502,6 +506,229 @@ async def generate_practice_batch(
     except ValidationError as exc:
         raise StructuralValidationError(
             "Generated questions failed structural validation."
+        ) from exc
+
+
+def _normalize_question_text_for_comparison(text: str) -> str:
+    """Normalize Japanese question text to detect duplicate/repeated follow-up questions."""
+    return re.sub(r"[\s\u3000]+", "", text.strip())
+
+
+def _parse_llm_follow_up_output(raw_output: Any) -> LLMGeneratedQuestionItem:
+    """Validate structured or JSON-string model output into LLMGeneratedQuestionItem."""
+    if raw_output is None:
+        raise UnsupportedStructuredOutputError(
+            "Selected Ollama model returned empty structured output."
+        )
+    if isinstance(raw_output, LLMGeneratedQuestionItem):
+        return raw_output
+    if isinstance(raw_output, LLMPracticeBatchOutput):
+        if not raw_output.questions:
+            raise StructuralValidationError(
+                "Model returned an empty question list for follow-up generation."
+            )
+        return raw_output.questions[0]
+
+    text_content: str | None = None
+    if isinstance(raw_output, AIMessage) and isinstance(raw_output.content, str):
+        text_content = raw_output.content.strip()
+    elif isinstance(raw_output, str):
+        text_content = raw_output.strip()
+
+    if text_content is not None:
+        fence_match = JSON_FENCE_PATTERN.search(text_content)
+        if fence_match:
+            text_content = fence_match.group(1).strip()
+        try:
+            parsed_json = json.loads(text_content)
+        except json.JSONDecodeError as exc:
+            raise StructuralValidationError(
+                "Model output is not valid JSON and failed structural validation."
+            ) from exc
+        if (
+            isinstance(parsed_json, dict)
+            and "questions" in parsed_json
+            and isinstance(parsed_json["questions"], list)
+            and parsed_json["questions"]
+        ):
+            return LLMGeneratedQuestionItem.model_validate(parsed_json["questions"][0])
+        return LLMGeneratedQuestionItem.model_validate(parsed_json)
+
+    if (
+        isinstance(raw_output, dict)
+        and "questions" in raw_output
+        and isinstance(raw_output["questions"], list)
+        and raw_output["questions"]
+    ):
+        return LLMGeneratedQuestionItem.model_validate(raw_output["questions"][0])
+
+    return LLMGeneratedQuestionItem.model_validate(raw_output)
+
+
+async def _invoke_follow_up_generation_chain(
+    llm: Any,
+    prompt_vars: dict[str, Any],
+    timeout_seconds: float,
+) -> Any:
+    """Invoke structured output for a single follow-up question where supported, with JSON fallback."""
+    if hasattr(llm, "with_structured_output"):
+        try:
+            structured_llm = llm.with_structured_output(LLMGeneratedQuestionItem)
+            chain = PRACTICE_FOLLOW_UP_PROMPT | structured_llm
+            result = await asyncio.wait_for(
+                chain.ainvoke(prompt_vars),
+                timeout=timeout_seconds,
+            )
+            if result is not None:
+                return result
+        except Exception as exc:
+            if is_timeout_error(exc):
+                raise asyncio.TimeoutError("Ollama follow-up generation timed out.") from None
+            if is_quota_or_rate_limit_error(exc):
+                raise QuotaExceededError(
+                    "Ollama endpoint rate limit exceeded. Please wait and try again."
+                ) from None
+            if is_unsupported_structured_output_error(exc):
+                if not hasattr(llm, "ainvoke") and not callable(llm):
+                    raise UnsupportedStructuredOutputError(
+                        "The selected Ollama model does not support structured output."
+                    ) from None
+            elif is_model_unavailable_error(exc):
+                raise OllamaUnavailableError(
+                    "Ollama service or selected model is unavailable."
+                ) from None
+            else:
+                raise
+
+    try:
+        fallback_chain = PRACTICE_FOLLOW_UP_PROMPT | llm
+        return await asyncio.wait_for(
+            fallback_chain.ainvoke(prompt_vars),
+            timeout=timeout_seconds,
+        )
+    except Exception as exc:
+        if is_timeout_error(exc):
+            raise asyncio.TimeoutError("Ollama follow-up generation timed out.") from None
+        if is_quota_or_rate_limit_error(exc):
+            raise QuotaExceededError(
+                "Ollama endpoint rate limit exceeded. Please wait and try again."
+            ) from None
+        if is_unsupported_structured_output_error(exc):
+            raise UnsupportedStructuredOutputError(
+                "The selected Ollama model does not support structured output."
+            ) from None
+        if is_model_unavailable_error(exc):
+            raise OllamaUnavailableError(
+                "Ollama service or selected model is unavailable."
+            ) from None
+        raise
+
+
+async def generate_follow_up_question(
+    payload: PracticeFollowUpRequest,
+    chat_model: Any = None,
+    settings: Settings | None = None,
+) -> PracticeFollowUpResponse:
+    """Generate one original follow-up question targeting the same learning point.
+
+    Validates output with Pydantic, ensures 4 distinct options, 1 correct answer, and
+    4 explanations, and rejects outputs that repeat the previous question.
+    Never logs or persists questions, answers, or conversation content.
+    """
+    enforce_privacy_environment()
+    cfg = settings or get_settings()
+    llm = chat_model if chat_model is not None else create_chat_model(cfg)
+
+    current_item = (
+        payload.current_item
+        if isinstance(payload.current_item, SelectedPracticeQuestionContext)
+        else SelectedPracticeQuestionContext(question_text=str(payload.current_item))
+    )
+    selected_answer = (payload.selected_answer or current_item.selected_answer or "").strip()
+
+    if payload.difficulty == FollowUpDifficulty.HARDER:
+        difficulty_instruction = (
+            f"Create a MORE CHALLENGING question than the previous item (upper-band JLPT {payload.level.value} "
+            "or subtler distractor contrast) while testing the exact same core grammar/vocabulary learning point."
+        )
+    else:
+        difficulty_instruction = (
+            f"Keep the SAME approximate JLPT {payload.level.value} difficulty as the previous item "
+            "to reinforce the exact same core learning point in a new context."
+        )
+
+    prompt_vars = {
+        "level": payload.level.value,
+        "category": payload.category.value,
+        "difficulty": payload.difficulty.value,
+        "difficulty_instruction": difficulty_instruction,
+        "explanation_language": payload.explanation_language.value,
+        "practice_item_context": _format_selected_question_data(current_item),
+        "selected_answer": selected_answer,
+    }
+
+    raw_output = await _invoke_follow_up_generation_chain(
+        llm=llm,
+        prompt_vars=prompt_vars,
+        timeout_seconds=cfg.ollama_timeout_seconds,
+    )
+
+    try:
+        parsed_item = _parse_llm_follow_up_output(raw_output)
+    except UnsupportedStructuredOutputError:
+        raise
+    except ValidationError as exc:
+        raise StructuralValidationError(
+            "Follow-up model output failed structural schema validation."
+        ) from exc
+
+    if _normalize_question_text_for_comparison(
+        parsed_item.question_text
+    ) == _normalize_question_text_for_comparison(current_item.question_text):
+        raise StructuralValidationError(
+            "Structural validation failed: follow-up question repeated the previous question."
+        )
+
+    if not (0 <= parsed_item.correct_index < len(parsed_item.options)):
+        raise StructuralValidationError(
+            "Structural validation failed: correct_index out of range."
+        )
+
+    try:
+        stable_id = compute_stable_question_id(
+            level=payload.level.value,
+            category=payload.category.value,
+            question_text=parsed_item.question_text,
+            options=parsed_item.options,
+        )
+        question_obj = GeneratedPracticeQuestion(
+            id=stable_id,
+            question_text=parsed_item.question_text,
+            options=parsed_item.options,
+            correct_index=parsed_item.correct_index,
+            correct_answer=parsed_item.options[parsed_item.correct_index],
+            option_explanations=parsed_item.option_explanations,
+            supporting_sentence=parsed_item.supporting_sentence,
+        )
+        return PracticeFollowUpResponse(
+            id=question_obj.id,
+            level=payload.level,
+            category=payload.category,
+            difficulty=payload.difficulty,
+            explanation_language=payload.explanation_language,
+            previous_question_id=current_item.id,
+            passage=current_item.passage,
+            question_text=question_obj.question_text,
+            options=question_obj.options,
+            correct_index=question_obj.correct_index,
+            correct_answer=question_obj.correct_answer,
+            option_explanations=question_obj.option_explanations,
+            supporting_sentence=question_obj.supporting_sentence,
+            question=question_obj,
+        )
+    except ValidationError as exc:
+        raise StructuralValidationError(
+            "Generated follow-up question failed structural validation."
         ) from exc
 
 

@@ -15,6 +15,8 @@ from app.schemas import (
     ExplanationLanguage,
     HealthResponse,
     JLPTLevel,
+    PracticeFollowUpRequest,
+    PracticeFollowUpResponse,
     PracticeGenerateRequest,
     PracticeGenerateResponse,
     PracticeQuestionRequest,
@@ -31,6 +33,7 @@ from app.services import (
     UnsupportedStructuredOutputError,
     answer_practice_item_tutor_question,
     evaluate_practice_answer,
+    generate_follow_up_question,
     generate_practice_batch,
     generate_practice_question,
     get_chat_model,
@@ -146,6 +149,82 @@ async def generate_practice_questions(
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to generate practice questions from Ollama model.",
+            headers={"Cache-Control": "no-store"},
+        ) from None
+
+
+@router.post(
+    "/api/practice/follow-up",
+    response_model=PracticeFollowUpResponse,
+    tags=["practice"],
+)
+@router.post(
+    "/practice/follow-up",
+    response_model=PracticeFollowUpResponse,
+    tags=["practice"],
+    include_in_schema=False,
+)
+async def generate_follow_up_practice_question(
+    payload: PracticeFollowUpRequest,
+    response: Response,
+    chat_model: Any = Depends(get_chat_model),
+    settings: Settings = Depends(get_settings),
+) -> PracticeFollowUpResponse:
+    """Generate one original follow-up question targeting the same learning point with Cache-Control: no-store."""
+    apply_no_store_headers(response)
+    try:
+        return await generate_follow_up_question(
+            payload=payload,
+            chat_model=chat_model,
+            settings=settings,
+        )
+    except OllamaUnavailableError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+            headers={"Cache-Control": "no-store"},
+        ) from None
+    except QuotaExceededError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
+            headers={"Cache-Control": "no-store"},
+        ) from None
+    except (UnsupportedStructuredOutputError, StructuralValidationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+            headers={"Cache-Control": "no-store"},
+        ) from None
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Follow-up question generation timed out waiting for Ollama.",
+            headers={"Cache-Control": "no-store"},
+        ) from None
+    except Exception as exc:
+        if is_timeout_error(exc):
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail="Follow-up question generation timed out waiting for Ollama.",
+                headers={"Cache-Control": "no-store"},
+            ) from None
+        if is_quota_or_rate_limit_error(exc):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Ollama endpoint rate limit exceeded. Please wait and try again.",
+                headers={"Cache-Control": "no-store"},
+            ) from None
+        if is_model_unavailable_error(exc):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Ollama service or selected model is unavailable.",
+                headers={"Cache-Control": "no-store"},
+            ) from None
+        # Never log prompts, answers, or exception details containing user content
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to generate follow-up question from Ollama model.",
             headers={"Cache-Control": "no-store"},
         ) from None
 

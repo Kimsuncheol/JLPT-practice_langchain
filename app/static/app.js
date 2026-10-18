@@ -419,6 +419,29 @@ function renderQuiz() {
       });
       feedbackPanel.appendChild(altList);
 
+      const followUpRow = document.createElement('div');
+      followUpRow.className = 'row follow-up-actions';
+      followUpRow.setAttribute('role', 'group');
+      followUpRow.setAttribute('aria-label', 'Follow-up question options');
+      followUpRow.style.marginTop = '0.75rem';
+      followUpRow.style.marginBottom = '0';
+
+      const againBtn = document.createElement('button');
+      againBtn.type = 'button';
+      againBtn.className = 'secondary follow-up-btn';
+      againBtn.textContent = 'Practice this again';
+      againBtn.onclick = () => generateFollowUpQuestion(qIdx, 'same');
+      followUpRow.appendChild(againBtn);
+
+      const harderBtn = document.createElement('button');
+      harderBtn.type = 'button';
+      harderBtn.className = 'follow-up-btn';
+      harderBtn.textContent = 'Try a harder question';
+      harderBtn.onclick = () => generateFollowUpQuestion(qIdx, 'harder');
+      followUpRow.appendChild(harderBtn);
+
+      feedbackPanel.appendChild(followUpRow);
+
       card.appendChild(feedbackPanel);
     }
 
@@ -434,6 +457,120 @@ function renderQuiz() {
     scoreBox.textContent =
       `Batch Score: ${correctCount} / ${total} — Unofficial AI practice (approximate difficulty). Graded locally in browser memory against the inspectable answer key (not tamper-proof, not stored, and does not predict an official JLPT score).`;
     summaryEl.appendChild(scoreBox);
+  }
+}
+
+async function generateFollowUpQuestion(questionIndex, requestedDifficulty) {
+  if (
+    !currentPracticeSet ||
+    !currentPracticeSet.questions ||
+    !currentPracticeSet.questions[questionIndex]
+  ) {
+    return;
+  }
+
+  const currentQuestion = currentPracticeSet.questions[questionIndex];
+  const selIdx = selectedAnswers[currentQuestion.id];
+  const selectedAnswerText =
+    typeof selIdx === 'number' && currentQuestion.options[selIdx]
+      ? currentQuestion.options[selIdx]
+      : currentQuestion.options[0];
+
+  const level = currentPracticeSet.level || document.getElementById('level').value;
+  const category = currentPracticeSet.category || document.getElementById('category').value;
+  const explanation_language =
+    currentPracticeSet.explanation_language ||
+    document.getElementById('explanation_language').value;
+
+  const followUpBtns = document.querySelectorAll('.follow-up-btn');
+  followUpBtns.forEach((btn) => {
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+  });
+
+  setErrorBanner('quiz-error', '');
+  const modeLabel =
+    requestedDifficulty === 'harder' ? 'Try a harder question' : 'Practice this again';
+  setStatusBanner(
+    'quiz-status',
+    `Loading: Generating follow-up question (${modeLabel}) targeting the same learning point...`
+  );
+
+  try {
+    const res = await fetch('/api/practice/follow-up', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      body: JSON.stringify({
+        level,
+        category,
+        explanation_language,
+        difficulty: requestedDifficulty,
+        selected_answer: selectedAnswerText,
+        current_item: {
+          id: currentQuestion.id,
+          passage: currentPracticeSet.passage || null,
+          question_text: currentQuestion.question_text,
+          options: currentQuestion.options,
+          correct_index: currentQuestion.correct_index,
+          correct_answer: currentQuestion.correct_answer,
+          selected_answer: selectedAnswerText,
+          supporting_sentence: currentQuestion.supporting_sentence || null,
+          option_explanations: currentQuestion.option_explanations
+        }
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setStatusBanner('quiz-status', '');
+      setErrorBanner('quiz-error', data.detail || 'Failed to generate follow-up question.');
+      return;
+    }
+
+    const followUpQuestion = data.question || {
+      id: data.id,
+      question_text: data.question_text,
+      options: data.options,
+      correct_index: data.correct_index,
+      correct_answer: data.correct_answer,
+      option_explanations: data.option_explanations,
+      supporting_sentence: data.supporting_sentence || null,
+      ai_generated: true,
+      difficulty_label: data.difficulty_label,
+      content_label: data.content_label
+    };
+
+    // Replace active practice set in browser memory and keep solution hidden until submission
+    currentPracticeSet = {
+      level: data.level || level,
+      category: data.category || category,
+      question_count: 1,
+      explanation_language: data.explanation_language || explanation_language,
+      passage: data.passage || null,
+      ai_generated: true,
+      unofficial_practice: true,
+      difficulty_label: data.difficulty_label,
+      content_label: data.content_label,
+      questions: [followUpQuestion]
+    };
+    selectedAnswers = {};
+    isQuizSubmitted = false;
+    activeTutorQuestionIndex = 0;
+
+    setStatusBanner(
+      'quiz-status',
+      `Follow-up question ready (${modeLabel}) — Select an answer and click Submit Answers to reveal the explanation.`
+    );
+    updateTutorQuestionSelector();
+    renderQuiz();
+  } catch (err) {
+    setStatusBanner('quiz-status', '');
+    setErrorBanner('quiz-error', 'Network error while generating follow-up question.');
+  } finally {
+    followUpBtns.forEach((btn) => {
+      btn.disabled = false;
+      btn.removeAttribute('aria-busy');
+    });
   }
 }
 

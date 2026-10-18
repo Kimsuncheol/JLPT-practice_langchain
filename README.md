@@ -159,7 +159,23 @@ curl -i -X POST "$BASE_URL/api/practice/generate" \
   -H "Content-Type: application/json" \
   -d '{"level":"N5","category":"grammar","question_count":2,"explanation_language":"English"}'
 
-# 3. Ask the tutor about a selected practice item
+# 3. Generate a follow-up question targeting the same learning point ("same" or "harder")
+curl -i -X POST "$BASE_URL/api/practice/follow-up" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "level": "N5",
+    "category": "grammar",
+    "explanation_language": "English",
+    "difficulty": "harder",
+    "selected_answer": "を",
+    "current_item": {
+      "question_text": "わたし（　）がくせいです。",
+      "options": ["は", "を", "に", "で"],
+      "correct_index": 0
+    }
+  }'
+
+# 4. Ask the tutor about a selected practice item
 curl -i -X POST "$BASE_URL/api/tutor" \
   -H "Content-Type: application/json" \
   -d '{
@@ -174,3 +190,4 @@ curl -i -X POST "$BASE_URL/api/tutor" \
     "message": "Why does は fit better than が here?"
   }'
 ```
+

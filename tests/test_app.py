@@ -921,6 +921,10 @@ def test_browser_jinja2_ui_reset_refresh_and_cold_start_notice() -> None:
     assert "session-missed-topics" in html
     assert "function compareAnswerLocally(" in html
     assert "function submitQuizLocally()" in html
+    assert "function generateFollowUpQuestion(" in html
+    assert "Practice this again" in html
+    assert "Try a harder question" in html
+    assert "/api/practice/follow-up" in html
     assert "function getSelectedQuestionPayload()" in html
     assert "function resetSession()" in html
     assert "Reset Session" in html
@@ -946,6 +950,150 @@ def test_browser_jinja2_ui_reset_refresh_and_cold_start_notice() -> None:
     assert "sessionStorage.setItem" not in html
     assert "indexedDB.open" not in html
     assert "document.cookie =" not in html
+
+
+def test_practice_follow_up_same_and_harder_difficulty_and_validation() -> None:
+    """POST /api/practice/follow-up generates 1 original question targeting the same learning point."""
+    follow_up_item = LLMGeneratedQuestionItem(
+        question_text="宿題を（　）からテレビを見ます。",
+        options=["して", "し", "する", "した"],
+        correct_index=0,
+        option_explanations=[
+            "Correct: てから indicates doing the second action after completing the first.",
+            "Incorrect: ます-stem does not connect directly to から for sequence.",
+            "Incorrect: Dictionary form + から indicates reason ('because').",
+            "Incorrect: た-form does not connect to から for sequence.",
+        ],
+    )
+    fake_model = FakeStructuredChatModel(follow_up_item)
+
+    app = create_app()
+    app.dependency_overrides[get_chat_model] = lambda: fake_model
+    client = TestClient(app)
+
+    # 1. "Practice this again" (difficulty: "same")
+    res_same = client.post(
+        "/api/practice/follow-up",
+        json={
+            "level": "N4",
+            "category": "grammar",
+            "explanation_language": "English",
+            "difficulty": "same",
+            "selected_answer": "読んだ",
+            "current_item": {
+                "id": "jlpt-n4-grammar-111111111111",
+                "question_text": "毎朝、新聞を（　）から会社へ行きます。",
+                "options": ["読んで", "読み", "読む", "読んだ"],
+                "correct_index": 0,
+                "correct_answer": "読んで",
+                "option_explanations": ["1", "2", "3", "4"],
+            },
+        },
+    )
+    assert res_same.status_code == 200
+    assert res_same.headers.get("Cache-Control") == "no-store"
+    assert fake_model.call_count == 1
+    assert fake_model.structured_schema is LLMGeneratedQuestionItem
+
+    body = res_same.json()
+    assert body["level"] == "N4"
+    assert body["category"] == "grammar"
+    assert body["difficulty"] == "same"
+    assert body["previous_question_id"] == "jlpt-n4-grammar-111111111111"
+    assert body["question_text"] == "宿題を（　）からテレビを見ます。"
+    assert body["correct_index"] == 0
+    assert body["correct_answer"] == "して"
+    assert len(body["options"]) == 4
+    assert len(body["option_explanations"]) == 4
+    assert body["question"]["question_text"] == "宿題を（　）からテレビを見ます。"
+    assert body["validation"]["structural_validation_passed"] is True
+
+    # Verify prompt included previous question, selected answer, and difficulty instruction
+    prompt_messages = fake_model.last_input.to_messages()
+    sys_content = prompt_messages[0].content
+    assert "<previous_practice_item_data>" in sys_content
+    assert "毎朝、新聞を（　）から会社へ行きます。" in sys_content
+    assert "<learner_selected_answer>\n読んだ\n</learner_selected_answer>" in sys_content
+    assert "SAME approximate JLPT N4 difficulty" in sys_content
+
+    # 2. "Try a harder question" (difficulty: "harder")
+    res_harder = client.post(
+        "/api/practice/follow-up",
+        json={
+            "level": "N4",
+            "category": "grammar",
+            "explanation_language": "English",
+            "difficulty": "harder",
+            "selected_answer": "読んで",
+            "current_item": {
+                "id": "jlpt-n4-grammar-111111111111",
+                "question_text": "毎朝、新聞を（　）から会社へ行きます。",
+                "options": ["読んで", "読み", "読む", "読んだ"],
+                "correct_index": 0,
+            },
+        },
+    )
+    assert res_harder.status_code == 200
+    assert res_harder.headers.get("Cache-Control") == "no-store"
+    assert res_harder.json()["difficulty"] == "harder"
+    harder_sys_content = fake_model.last_input.to_messages()[0].content
+    assert "MORE CHALLENGING" in harder_sys_content
+
+
+def test_practice_follow_up_rejects_repeated_question_and_preserves_log_privacy(caplog) -> None:
+    """POST /api/practice/follow-up rejects repeated questions (502), missing selected_answer (422), and logs nothing."""
+    caplog.set_level(logging.DEBUG)
+    repeated_text = "秘密の質問文＿リピート禁止（　）から行きます。"
+    secret_selected = "秘密の誤答＿選択肢B"
+
+    repeated_item = LLMGeneratedQuestionItem(
+        question_text=repeated_text,
+        options=["して", "し", "する", "した"],
+        correct_index=0,
+        option_explanations=["1", "2", "3", "4"],
+    )
+    app = create_app()
+    app.dependency_overrides[get_chat_model] = lambda: FakeStructuredChatModel(repeated_item)
+    client = TestClient(app)
+
+    # Repeated question text -> 502 StructuralValidationError
+    res_repeat = client.post(
+        "/api/practice/follow-up",
+        json={
+            "level": "N4",
+            "category": "grammar",
+            "difficulty": "same",
+            "selected_answer": secret_selected,
+            "current_item": {
+                "question_text": repeated_text,
+                "options": ["読んで", "読み", "読む", "読んだ"],
+                "correct_index": 0,
+            },
+        },
+    )
+    assert res_repeat.status_code == 502
+    assert res_repeat.headers.get("Cache-Control") == "no-store"
+    assert "repeated" in res_repeat.json()["detail"].lower()
+
+    # Missing selected_answer -> 422 Unprocessable Entity
+    res_missing_sel = client.post(
+        "/api/practice/follow-up",
+        json={
+            "level": "N4",
+            "category": "grammar",
+            "difficulty": "harder",
+            "current_item": {
+                "question_text": repeated_text,
+                "options": ["読んで", "読み", "読む", "読んだ"],
+            },
+        },
+    )
+    assert res_missing_sel.status_code == 422
+    assert res_missing_sel.headers.get("Cache-Control") == "no-store"
+
+    # Ensure neither question text nor selected answer appears in application logs
+    assert repeated_text not in caplog.text
+    assert secret_selected not in caplog.text
 
 
 def test_create_chat_model_passes_ollama_settings_and_blocks_localhost_on_render() -> None:
@@ -1055,3 +1203,4 @@ def test_configurable_ollama_model_and_base_url_defaults() -> None:
     )
     assert custom_settings.ollama_base_url == "https://ollama.myhost.example"
     assert custom_settings.ollama_model == "llama3.1:8b"
+

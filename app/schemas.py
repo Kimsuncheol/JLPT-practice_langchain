@@ -97,6 +97,13 @@ class ExplanationLanguage(str, Enum):
     JAPANESE = "Japanese"
 
 
+class FollowUpDifficulty(str, Enum):
+    """Supported follow-up difficulty modes ('same' for 'Practice this again', 'harder' for 'Try a harder question')."""
+
+    SAME = "same"
+    HARDER = "harder"
+
+
 def _normalize_explanation_language_value(value: object) -> object:
     if isinstance(value, str):
         mapping = {
@@ -109,6 +116,33 @@ def _normalize_explanation_language_value(value: object) -> object:
         }
         return mapping.get(value.strip().lower(), value)
     return value
+
+
+def _normalize_follow_up_difficulty(value: object) -> object:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        mapping = {
+            "same": "same",
+            "again": "same",
+            "practice_again": "same",
+            "practice this again": "same",
+            "similar": "same",
+            "same_difficulty": "same",
+            "review": "same",
+            "normal": "same",
+            "standard": "same",
+            "harder": "harder",
+            "try_harder": "harder",
+            "try a harder question": "harder",
+            "hard": "harder",
+            "more_difficult": "harder",
+            "challenging": "harder",
+            "challenge": "harder",
+            "up": "harder",
+        }
+        return mapping.get(normalized, value)
+    return value
+
 
 
 def compute_stable_question_id(
@@ -537,6 +571,130 @@ class SelectedPracticeQuestionContext(BaseModel):
             if len(exp) > 600:
                 raise ValueError("Each option explanation must be at most 600 characters.")
         return value
+
+
+class PracticeFollowUpRequest(BaseModel):
+    """Bounded, stateless request for POST /api/practice/follow-up."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    level: JLPTLevel = Field(
+        default=JLPTLevel.N5,
+        description="Target JLPT proficiency level (N5 through N1).",
+    )
+    category: GenerationCategory = Field(
+        default=GenerationCategory.GRAMMAR,
+        description="Practice category ('vocabulary', 'grammar', or 'reading').",
+    )
+    explanation_language: ExplanationLanguage = Field(
+        default=ExplanationLanguage.ENGLISH,
+        description="Language for option explanations: 'English', 'Korean', or 'Japanese'.",
+    )
+    difficulty: FollowUpDifficulty = Field(
+        default=FollowUpDifficulty.SAME,
+        validation_alias=AliasChoices(
+            "difficulty",
+            "requested_difficulty",
+            "target_difficulty",
+            "mode",
+        ),
+        description="Requested follow-up difficulty: 'same' ('Practice this again') or 'harder' ('Try a harder question').",
+    )
+    current_item: Union[SelectedPracticeQuestionContext, str] = Field(
+        ...,
+        validation_alias=AliasChoices(
+            "current_item",
+            "practice_item",
+            "question",
+            "current_question",
+            "item",
+        ),
+        description="The current practice item being followed up on.",
+    )
+    selected_answer: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description="Learner's selected answer for the current practice item.",
+    )
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def normalize_category(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @field_validator("explanation_language", mode="before")
+    @classmethod
+    def normalize_explanation_language(cls, value: object) -> object:
+        return _normalize_explanation_language_value(value)
+
+    @field_validator("difficulty", mode="before")
+    @classmethod
+    def normalize_difficulty(cls, value: object) -> object:
+        return _normalize_follow_up_difficulty(value)
+
+    @field_validator("current_item", mode="after")
+    @classmethod
+    def normalize_current_item(
+        cls, value: Union[SelectedPracticeQuestionContext, str]
+    ) -> SelectedPracticeQuestionContext:
+        if isinstance(value, str):
+            cleaned = value.strip()
+            if not cleaned or len(cleaned) > 500:
+                raise ValueError("Question text must be between 1 and 500 characters.")
+            return SelectedPracticeQuestionContext(question_text=cleaned)
+        return value
+
+    @model_validator(mode="after")
+    def verify_selected_answer_present(self) -> "PracticeFollowUpRequest":
+        """Ensure selected_answer is provided either at top level or inside current_item."""
+        resolved = (self.selected_answer or "").strip()
+        if (
+            not resolved
+            and isinstance(self.current_item, SelectedPracticeQuestionContext)
+            and self.current_item.selected_answer
+        ):
+            resolved = self.current_item.selected_answer.strip()
+
+        if not resolved:
+            raise ValueError(
+                "selected_answer is required for follow-up question generation."
+            )
+
+        self.selected_answer = resolved
+        if isinstance(self.current_item, SelectedPracticeQuestionContext):
+            self.current_item.selected_answer = resolved
+        return self
+
+
+class PracticeFollowUpResponse(BaseModel):
+    """Validated response for POST /api/practice/follow-up."""
+
+    id: str = Field(..., min_length=5, max_length=80)
+    level: JLPTLevel
+    category: GenerationCategory
+    difficulty: FollowUpDifficulty
+    explanation_language: ExplanationLanguage
+    previous_question_id: Optional[str] = None
+    passage: Optional[str] = Field(
+        default=None,
+        max_length=MAX_READING_PASSAGE_CHARS,
+    )
+    question_text: str
+    options: list[str] = Field(..., min_length=4, max_length=4)
+    correct_index: int = Field(..., ge=0, le=3)
+    correct_answer: str
+    option_explanations: list[str] = Field(..., min_length=4, max_length=4)
+    supporting_sentence: Optional[str] = None
+    question: GeneratedPracticeQuestion
+    ai_generated: Literal[True] = True
+    unofficial_practice: Literal[True] = True
+    difficulty_label: str = Field(default=APPROXIMATE_DIFFICULTY_LABEL)
+    content_label: str = Field(default=UNOFFICIAL_AI_CONTENT_LABEL)
+    score_disclaimer: str = Field(default=SCORE_PREDICTION_DISCLAIMER)
+    self_study_notice: str = Field(default=SELF_STUDY_GRADING_NOTICE)
+    validation: ValidationReport = Field(default_factory=ValidationReport)
 
 
 class TutorRequest(BaseModel):

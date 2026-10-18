@@ -11,8 +11,11 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
+from langchain_ollama import ChatOllama
 
 from app.main import create_app
+from app.config import Settings
+from app.services import create_chat_model
 from app.services import get_chat_model
 from app.words import (
     CuratedExamSourceRecord,
@@ -120,6 +123,49 @@ def client_for(
     if sources is not None:
         app.dependency_overrides[get_exam_source_collection] = lambda: sources
     return TestClient(app), calls
+
+
+def test_cloud_word_explanation_uses_tool_arguments_in_one_call(monkeypatch) -> None:
+    """Exercise real ChatOllama serialization/parsing, not a prevalidated fake."""
+    requests = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests.append(body)
+        # Cloud does not support the JSON-schema `format` parameter. A plain
+        # invocation has no tool arguments and cannot satisfy this contract.
+        if not body.get("tools") or body.get("format"):
+            return httpx.Response(400, json={"error": "unsupported output format"})
+        tool_name = body["tools"][0]["function"]["name"]
+        return httpx.Response(200, json={
+            "model": "gpt-oss:120b", "done": True, "done_reason": "stop",
+            "message": {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": tool_name, "arguments": DETAILED_CONTENT}}
+            ]},
+        })
+
+    def transport_model(settings: Settings) -> ChatOllama:
+        from pydantic import SecretStr
+        model = create_chat_model(settings.model_copy(update={
+            "ollama_base_url": "https://ollama.com",
+            "ollama_model": "gpt-oss:120b",
+            "ollama_api_key": SecretStr("test-key"),
+        }))
+        return ChatOllama(
+            model=model.model, base_url=model.base_url,
+            num_predict=model.num_predict, reasoning=model.reasoning,
+            async_client_kwargs={"transport": httpx.MockTransport(upstream)},
+        )
+
+    monkeypatch.setattr("app.words.create_chat_model", transport_model)
+    app = create_app()
+    with TestClient(app) as client:
+        response = client.post("/api/words/explain", json={"word": "準備"})
+    assert response.status_code == 200, response.text
+    assert response.json()["follow_up_questions"] == DETAILED_CONTENT["follow_up_questions"]
+    assert len(requests) == 1
+    assert requests[0]["options"]["num_predict"] == 8192
+    assert requests[0]["think"] == "low"
 
 
 def test_word_explanation_verified_past_exam_provenance_and_privacy(caplog) -> None:

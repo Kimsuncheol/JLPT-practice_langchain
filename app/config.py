@@ -81,10 +81,16 @@ class Settings(BaseSettings):
         default=0.4, ge=0.0, le=2.0, alias="OLLAMA_TEMPERATURE"
     )
     ollama_num_predict: int = Field(
-        default=2048, ge=256, le=4096, alias="OLLAMA_NUM_PREDICT"
+        default=2048, ge=256, le=16384, alias="OLLAMA_NUM_PREDICT"
     )
     ollama_timeout_seconds: float = Field(
         default=45.0, ge=1.0, le=120.0, alias="OLLAMA_TIMEOUT_SECONDS"
+    )
+    word_num_predict: int = Field(
+        default=8192, ge=2048, le=16384, alias="WORD_NUM_PREDICT"
+    )
+    word_timeout_seconds: float = Field(
+        default=90.0, ge=1.0, le=120.0, alias="WORD_TIMEOUT_SECONDS"
     )
     max_request_body_bytes: int = Field(
         default=MAX_REQUEST_BODY_BYTES, ge=512, le=16384, alias="MAX_REQUEST_BODY_BYTES"

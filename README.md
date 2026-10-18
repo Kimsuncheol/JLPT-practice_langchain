@@ -449,6 +449,20 @@ Stateless JLPT tutoring. The server asks Ollama for the concise pedagogical repl
 
 Explains a Japanese word or expression with deep grammatical and lexical nuance, original AI examples, server-attached verified past-exam citations from `app/data/verified_exam_sources.json`, and three AI-generated follow-up questions produced in the same single model call.
 
+Generation uses the model's structured-output interface before considering plain
+text invocation. Direct Ollama Cloud (`https://ollama.com`) uses function calling
+to return validated output arguments: Cloud does not support Ollama's JSON-schema
+`format` parameter. Other Ollama hosts use native JSON-schema output. The same
+provider selection applies to structured practice generation. A Cloud model must
+support tool calling (the default `gpt-oss:120b` does).
+
+Word explanations have a separate bounded output budget, `WORD_NUM_PREDICT`
+(default 8,192; range 2,048–16,384), and timeout, `WORD_TIMEOUT_SECONDS`
+(default 90 seconds; range 1–120). The generic 2,048-token budget is too small
+for reliably completing detailed explanations plus follow-up questions, especially
+with reasoning models. `gpt-oss` uses low reasoning effort; the reasoning text is
+never part of the API response. There are no automatic retries or repair calls.
+
 **Request (`WordExplainRequest`)**:
 ```json
 {
@@ -565,6 +579,12 @@ Explains a Japanese word or expression with deep grammatical and lexical nuance,
 | `502 Bad Gateway` | Malformed model output, duplicate choices, missing Japanese script, or failed structural validation. | `{"detail": "Failed to generate practice questions from Ollama model."}` |
 | `503 Service Unavailable` | Ollama endpoint unreachable, model missing, missing Cloud API key, or invalid `localhost` URL on Render Free. | `{"detail": "Ollama service or selected model is unavailable."}` |
 | `504 Gateway Timeout` | Async generation exceeded configured `OLLAMA_TIMEOUT_SECONDS`. | `{"detail": "Practice question generation timed out waiting for Ollama."}` |
+
+For word explanations, `502` means generation failed or the response could not be
+validated, with detail `Word explanation failed or returned invalid output.`;
+it does not mean the HTTP service is offline. `504` uses `WORD_TIMEOUT_SECONDS`
+and detail `Word explanation timed out waiting for Ollama.`. The Flutter client
+maps `502` to its localized incomplete-response message and keeps manual retry.
 
 For missing Cloud credentials, generation and tutor routes return HTTP `503` with
 `{"detail":"OLLAMA_API_KEY must be configured on the backend for Ollama Cloud."}`.

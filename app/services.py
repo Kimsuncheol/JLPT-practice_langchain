@@ -201,13 +201,31 @@ def create_chat_model(settings: Settings | None = None) -> ChatOllama:
     if api_key:
         client_kwargs["headers"] = {"Authorization": f"Bearer {api_key}"}
 
+    reasoning_options = (
+        {"reasoning": "low"}
+        if model_name.split(":")[0].split("/")[-1] == "gpt-oss"
+        else {}
+    )
     return ChatOllama(
         model=model_name,
         base_url=base_url,
         temperature=cfg.ollama_temperature,
         num_predict=cfg.ollama_num_predict,
         client_kwargs=client_kwargs,
+        **reasoning_options,
     )
+
+
+def structured_output_model(llm: Any, schema: type) -> Any:
+    """Cloud supports tool calls, but not Ollama's JSON-schema format field."""
+    if isinstance(llm, ChatOllama):
+        method = (
+            "function_calling"
+            if urlparse(llm.base_url or "").hostname == "ollama.com"
+            else "json_schema"
+        )
+        return llm.with_structured_output(schema, method=method)
+    return llm.with_structured_output(schema)
 
 
 def get_chat_model() -> Any:
@@ -351,7 +369,7 @@ async def _invoke_batch_generation_chain(
     """Invoke structured output where supported by the Ollama model, with fallback handling."""
     if hasattr(llm, "with_structured_output"):
         try:
-            structured_llm = llm.with_structured_output(LLMPracticeBatchOutput)
+            structured_llm = structured_output_model(llm, LLMPracticeBatchOutput)
             chain = PRACTICE_BATCH_GENERATE_PROMPT | structured_llm
             result = await asyncio.wait_for(
                 chain.ainvoke(prompt_vars),
@@ -579,7 +597,7 @@ async def _invoke_follow_up_generation_chain(
     """Invoke structured output for a single follow-up question where supported, with JSON fallback."""
     if hasattr(llm, "with_structured_output"):
         try:
-            structured_llm = llm.with_structured_output(LLMGeneratedQuestionItem)
+            structured_llm = structured_output_model(llm, LLMGeneratedQuestionItem)
             chain = PRACTICE_FOLLOW_UP_PROMPT | structured_llm
             result = await asyncio.wait_for(
                 chain.ainvoke(prompt_vars),
@@ -744,7 +762,7 @@ async def generate_practice_question(
 ) -> PracticeQuestionResponse:
     """Generate a single structured JLPT practice question without logging or persistence."""
     llm = create_chat_model(settings)
-    structured_llm = llm.with_structured_output(PracticeQuestionResponse)
+    structured_llm = structured_output_model(llm, PracticeQuestionResponse)
     chain = PRACTICE_QUESTION_PROMPT | structured_llm
 
     result = await chain.ainvoke(

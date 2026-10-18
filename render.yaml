@@ -7,13 +7,12 @@ services:
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /health
     envVars:
-      # Render Free cannot host an Ollama model or reach a developer's Mac localhost.
-      # Supply a separately hosted, reachable HTTPS Ollama endpoint URL manually.
+      # Call Ollama Cloud directly; no local Ollama daemon is needed.
       - key: OLLAMA_BASE_URL
-        sync: false
+        value: https://ollama.com
       - key: OLLAMA_MODEL
-        value: qwen2.5:7b
-      # Server-side credential for authenticating to the remote Ollama endpoint
+        value: gpt-oss:120b
+      # Set an Ollama Cloud API key in the Render dashboard (backend only).
       - key: OLLAMA_API_KEY
         sync: false
       - key: LANGCHAIN_TRACING_V2

@@ -62,11 +62,11 @@ class Settings(BaseSettings):
 
     app_name: str = Field(default="JLPT Practice & Tutor API", alias="APP_NAME")
     ollama_base_url: str = Field(
-        default="http://localhost:11434",
+        default="https://ollama.com",
         validation_alias=AliasChoices("OLLAMA_BASE_URL", "ollama_base_url"),
     )
     ollama_model: str = Field(
-        default="qwen2.5:7b",
+        default="gpt-oss:120b",
         validation_alias=AliasChoices("OLLAMA_MODEL", "ollama_model"),
     )
     ollama_api_key: SecretStr = Field(

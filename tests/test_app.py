@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableLambda
 
-from app.config import Settings, enforce_privacy_environment
+from app.config import Settings, enforce_privacy_environment, get_settings
 from app.main import create_app
 from app.schemas import (
     ChatMessage,
@@ -96,7 +96,7 @@ def test_no_gemini_dependencies_and_health_does_not_call_ollama() -> None:
         assert response.status_code == 200
         body = response.json()
         assert body["status"] == "ok"
-        assert body["model"] == "qwen2.5:7b"
+        assert body["model"] == "gpt-oss:120b"
         assert body["base_url_configured"] is True
         assert body["tracing_disabled"] is True
         assert body["persistence"] == "none"
@@ -141,9 +141,9 @@ def test_render_yaml_blueprint_configuration() -> None:
 
     env_vars = {item["key"]: item for item in svc.get("envVars", [])}
     assert "OLLAMA_BASE_URL" in env_vars
-    assert env_vars["OLLAMA_BASE_URL"].get("sync") is False
+    assert env_vars["OLLAMA_BASE_URL"]["value"] == "https://ollama.com"
     assert "OLLAMA_MODEL" in env_vars
-    assert env_vars["OLLAMA_MODEL"]["value"] == "qwen2.5:7b"
+    assert env_vars["OLLAMA_MODEL"]["value"] == "gpt-oss:120b"
     assert "OLLAMA_API_KEY" in env_vars
     assert env_vars["OLLAMA_API_KEY"].get("sync") is False
     assert "GOOGLE_API_KEY" not in env_vars
@@ -1192,8 +1192,8 @@ def test_request_local_history_conversion() -> None:
 def test_configurable_ollama_model_and_base_url_defaults() -> None:
     """Default OLLAMA_BASE_URL and OLLAMA_MODEL are configurable without requiring Google keys."""
     default_settings = Settings(_env_file=None)
-    assert default_settings.ollama_base_url == "http://localhost:11434"
-    assert default_settings.ollama_model == "qwen2.5:7b"
+    assert default_settings.ollama_base_url == "https://ollama.com"
+    assert default_settings.ollama_model == "gpt-oss:120b"
 
     custom_settings = Settings(
         _env_file=None,
@@ -1202,6 +1202,62 @@ def test_configurable_ollama_model_and_base_url_defaults() -> None:
     )
     assert custom_settings.ollama_base_url == "https://ollama.myhost.example"
     assert custom_settings.ollama_model == "llama3.1:8b"
+
+
+def test_ollama_cloud_async_request_uses_cloud_host_model_and_bearer_token() -> None:
+    """Exercise the real async ChatOllama client without sending a network request."""
+    from langchain_ollama import ChatOllama
+
+    requests = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "model": "gpt-oss:120b",
+                "message": {"role": "assistant", "content": "Cloud reply"},
+                "done": True,
+            },
+        )
+
+    settings = Settings(_env_file=None, OLLAMA_API_KEY="test-cloud-key")
+
+    def with_mock_transport(**kwargs: Any) -> ChatOllama:
+        kwargs["client_kwargs"]["transport"] = httpx.MockTransport(handle)
+        return ChatOllama(**kwargs)
+
+    with patch("app.services.ChatOllama", side_effect=with_mock_transport):
+        model = create_chat_model(settings)
+        result = asyncio.run(model.ainvoke("Explain お見舞い briefly."))
+    assert result.content == "Cloud reply"
+    assert len(requests) == 1
+    assert str(requests[0].url) == "https://ollama.com/api/chat"
+    assert requests[0].headers["Authorization"] == "Bearer test-cloud-key"
+    assert json.loads(requests[0].content)["model"] == "gpt-oss:120b"
+
+
+def test_missing_cloud_key_returns_503_without_upstream_call() -> None:
+    settings = Settings(_env_file=None, OLLAMA_API_KEY="")
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: settings
+    with TestClient(app) as client, patch("app.services.ChatOllama") as model:
+        health = client.get("/health")
+        assert health.status_code == 200
+        response = client.post("/api/words/explain", json={"word": "お見舞い"})
+        assert response.status_code == 503
+        assert response.json() == {
+            "detail": "Ollama service or selected model is unavailable."
+        }
+        assert response.headers["Cache-Control"] == "no-store"
+        response = client.post(
+            "/api/practice/generate", json={"level": "N5", "category": "grammar"}
+        )
+        assert response.status_code == 503
+        assert response.json() == {
+            "detail": "OLLAMA_API_KEY must be configured on the backend for Ollama Cloud."
+        }
+        model.assert_not_called()
 
 
 

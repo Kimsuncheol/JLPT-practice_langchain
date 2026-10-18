@@ -8,7 +8,7 @@ A privacy-first, stateless Japanese Language Proficiency Test (JLPT N5–N1) pra
 .
 ├── .env.example          # Example environment configuration (OLLAMA_BASE_URL & OLLAMA_MODEL)
 ├── .gitignore            # Git ignore rules (excludes .venv, .env, caches, etc.)
-├── README.md             # Local Ollama setup, Render Free deployment, and smoke test instructions
+├── README.md             # Ollama Cloud setup, Render Free deployment, and smoke test instructions
 ├── pyproject.toml        # Project metadata and pytest configuration
 ├── render.yaml           # Render Blueprint for one free Python web service
 ├── requirements.txt      # Reproducible pinned Python dependencies (no Gemini/Google packages)
@@ -45,29 +45,15 @@ A privacy-first, stateless Japanese Language Proficiency Test (JLPT N5–N1) pra
 
 ---
 
-## Local Setup Instructions (macOS / Linux)
+## Development Setup (macOS / Linux, Ollama Cloud)
 
-### 1. Install Ollama and Download the Selected Model
+### 1. Create an Ollama Cloud API Key
 
-1. **Install Ollama**:
-   - macOS (Homebrew):
-     ```bash
-     brew install --cask ollama
-     ```
-     *(Or download the installer from [https://ollama.com/download](https://ollama.com/download)).*
-2. **Start the local Ollama server**:
-   ```bash
-   ollama serve
-   ```
-   By default, Ollama listens at `http://localhost:11434`.
-3. **Download (pull) the selected model** (`qwen2.5:7b` is the default and supports Japanese and structured JSON output):
-   ```bash
-   ollama pull qwen2.5:7b
-   ```
-   Verify the model is available locally:
-   ```bash
-   ollama list
-   ```
+Create a server-side API key at [Ollama API keys](https://ollama.com/settings/keys).
+This application calls [Ollama Cloud directly](https://docs.ollama.com/cloud) at
+`https://ollama.com`; no local Ollama installation, daemon, or model download is needed.
+The default model is `gpt-oss:120b`. Use a model name returned by
+`https://ollama.com/api/tags`, rather than a local CLI `-cloud` alias.
 
 ### 2. Create Local Python Virtual Environment & Install Dependencies
 
@@ -84,12 +70,12 @@ Copy `.env.example` to `.env`:
 cp .env.example .env
 ```
 
-Default `.env` values for local development:
+Set these values in `.env` for the locally running FastAPI server:
 
 ```env
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=qwen2.5:7b
-OLLAMA_API_KEY=
+OLLAMA_BASE_URL=https://ollama.com
+OLLAMA_MODEL=gpt-oss:120b
+OLLAMA_API_KEY=your_ollama_cloud_api_key
 LANGCHAIN_TRACING_V2=false
 LANGCHAIN_TRACING=false
 LANGSMITH_TRACING=false
@@ -112,26 +98,25 @@ LANGSMITH_TRACING=false
 
 ---
 
-## Render Free Deployment Guide (With Separately Hosted Remote Ollama)
+## Render Free Deployment Guide (Ollama Cloud)
 
-> [!IMPORTANT]
-> **Render Free Constraints for Ollama**:
-> 1. **Render Free cannot host an Ollama LLM itself** (a Render Free web service has only 512 MB RAM, 0.1 CPU, no GPU, and no persistent disk).
-> 2. **Render Free runs in the cloud and cannot access your Mac's `http://localhost:11434`**.
-> 3. Therefore, deploying the FastAPI web app on Render Free **requires a separately hosted, network-reachable HTTPS Ollama endpoint** (for example, an Ollama instance running on a cloud GPU VM or private server behind an HTTPS reverse proxy such as Caddy/Nginx/Cloudflare Access with Bearer token authentication).
-> 4. If `RENDER=true` and `OLLAMA_BASE_URL` points to `localhost` or `127.0.0.1`, the backend rejects model calls with `503 Service Unavailable` and a clear configuration message.
+Render hosts the FastAPI application; inference runs directly on Ollama Cloud.
+`OLLAMA_BASE_URL` defaults to `https://ollama.com` and `OLLAMA_MODEL` defaults to
+`gpt-oss:120b` in both the application and Render Blueprint.
 
-### 1. Secure Your Remote Ollama Endpoint
+### 1. Configure Cloud Authentication
 
-- Never expose an unauthenticated Ollama daemon (`0.0.0.0:11434`) directly to the public internet.
-- Place your remote Ollama server behind **HTTPS (TLS)** and require an `Authorization: Bearer <token>` header at the reverse proxy.
-- Supply that token to the FastAPI backend via the server-side `OLLAMA_API_KEY` environment variable. The FastAPI backend attaches `Authorization: Bearer <OLLAMA_API_KEY>` in `ChatOllama(client_kwargs={"headers": ...})` and never exposes the URL or credentials to the browser.
+- Create an [Ollama Cloud API key](https://ollama.com/settings/keys).
+- Set `OLLAMA_API_KEY` in the backend environment. It is required for direct Cloud calls.
+- The backend passes `Authorization: Bearer <OLLAMA_API_KEY>` through
+  `ChatOllama(client_kwargs={"headers": ...})` to both sync and async Ollama clients.
+- Keep the key exclusively on the backend. The example environment file contains no credential.
 
 ### 2. Connect Git Repository & Create the Render Service
 
 1. Push this repository to GitHub or GitLab (ensuring `.env` and `.venv/` are ignored).
 2. In the [Render Dashboard](https://dashboard.render.com/), click **New +** → **Blueprint** and select your repository.
-3. Render reads [render.yaml](file:///Users/gimseoncheol/Desktop/JLPT-practice_langchain/render.yaml) to create a single free Python web service (`jlpt-practice-langchain`) with:
+3. Render reads [render.yaml](render.yaml) to create a single free Python web service (`jlpt-practice-langchain`) with:
    - **Build Command**: `pip install --no-cache-dir -r requirements.txt`
    - **Start Command**: `uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1`
    - **Health Check Path**: `/health`
@@ -141,9 +126,9 @@ LANGSMITH_TRACING=false
 
 | Key | Value / Source | Notes |
 | --- | --- | --- |
-| `OLLAMA_BASE_URL` | *(Manual Secret / URL)* | Reachable HTTPS URL of your separately hosted Ollama endpoint (e.g., `https://ollama.example.com`). Must **not** be `localhost`. |
-| `OLLAMA_MODEL` | `qwen2.5:7b` | Name of the model pulled on the remote Ollama server. |
-| `OLLAMA_API_KEY` | *(Manual Secret)* | Server-side Bearer token for authenticating to your secured remote Ollama proxy (`sync: false`). |
+| `OLLAMA_BASE_URL` | `https://ollama.com` | Direct Ollama Cloud host; do not append `/api` or `/v1`. |
+| `OLLAMA_MODEL` | `gpt-oss:120b` | Cloud API model name from `/api/tags`. |
+| `OLLAMA_API_KEY` | *(Manual Secret)* | Ollama Cloud API key, supplied as a server-side Bearer token (`sync: false`). |
 | `LANGCHAIN_TRACING_V2` | `false` | Keeps LangChain tracing disabled. |
 | `LANGCHAIN_TRACING` | `false` | Keeps LangChain tracing disabled. |
 | `LANGSMITH_TRACING` | `false` | Keeps LangSmith tracing disabled. |
@@ -236,7 +221,7 @@ Lightweight application health and configuration check. Never makes an external 
 ```json
 {
   "status": "ok",
-  "model": "qwen2.5:7b",
+  "model": "gpt-oss:120b",
   "base_url_configured": true,
   "tracing_disabled": true,
   "persistence": "none"
@@ -578,8 +563,18 @@ Explains a Japanese word or expression with deep grammatical and lexical nuance,
 | `422 Unprocessable Entity` | Pydantic validation failure (e.g., question count out of range, missing fields, invalid role). | FastAPI standard `{"detail": [{"loc": [...], "msg": "...", "type": "..."}]}` |
 | `429 Too Many Requests` | Remote Ollama gateway returns rate limit / quota exhaustion. | `{"detail": "Ollama endpoint rate limit exceeded. Please wait and try again."}` |
 | `502 Bad Gateway` | Malformed model output, duplicate choices, missing Japanese script, or failed structural validation. | `{"detail": "Failed to generate practice questions from Ollama model."}` |
-| `503 Service Unavailable` | Ollama daemon unreachable, model missing, or invalid `localhost` URL on Render Free. | `{"detail": "Ollama service or selected model is unavailable."}` |
+| `503 Service Unavailable` | Ollama endpoint unreachable, model missing, missing Cloud API key, or invalid `localhost` URL on Render Free. | `{"detail": "Ollama service or selected model is unavailable."}` |
 | `504 Gateway Timeout` | Async generation exceeded configured `OLLAMA_TIMEOUT_SECONDS`. | `{"detail": "Practice question generation timed out waiting for Ollama."}` |
+
+For missing Cloud credentials, generation and tutor routes return HTTP `503` with
+`{"detail":"OLLAMA_API_KEY must be configured on the backend for Ollama Cloud."}`.
+The word explanation route returns the sanitized HTTP `503` detail
+`Ollama service or selected model is unavailable.`. No upstream call is made.
+`GET /health` remains a liveness check: it does not validate the key, model access,
+or upstream connectivity. A healthy response does not confirm Cloud inference works.
+
+For an existing Render service, update its environment values to the table above
+and redeploy; repository changes alone do not verify or update the running service.
 
 All error responses include `Cache-Control: no-store` and `Pragma: no-cache`. Safe, sanitized error messages prevent prompt or credential leakage.
 

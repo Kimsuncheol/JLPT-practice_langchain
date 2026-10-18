@@ -17,6 +17,7 @@ import asyncio
 import json
 import re
 from typing import Any
+from urllib.parse import urlparse
 import httpx
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_ollama import ChatOllama
@@ -193,6 +194,10 @@ def create_chat_model(settings: Settings | None = None) -> ChatOllama:
 
     client_kwargs: dict[str, Any] = {"timeout": cfg.ollama_timeout_seconds}
     api_key = cfg.ollama_api_key.get_secret_value().strip()
+    if urlparse(base_url).hostname == "ollama.com" and not api_key:
+        raise OllamaUnavailableError(
+            "OLLAMA_API_KEY must be configured on the backend for Ollama Cloud."
+        )
     if api_key:
         client_kwargs["headers"] = {"Authorization": f"Bearer {api_key}"}
 

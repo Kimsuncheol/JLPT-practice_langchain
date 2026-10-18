@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import enforce_privacy_environment, get_settings
 from app.routes import router
+from app.words import router as words_router
 from app.services import OllamaUnavailableError
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -58,7 +59,12 @@ def create_app() -> FastAPI:
     ) -> Response:
         """Enforce bounded input size and guarantee Cache-Control: no-store on practice/tutor routes."""
         path = request.url.path
-        is_sensitive_route = "/practice" in path or "/tutor" in path or path == "/"
+        is_sensitive_route = (
+            "/practice" in path
+            or "/tutor" in path
+            or "/words" in path
+            or path == "/"
+        )
 
         if request.method in {"POST", "PUT", "PATCH"}:
             body = await request.body()
@@ -86,6 +92,7 @@ def create_app() -> FastAPI:
         )
 
     application.include_router(router)
+    application.include_router(words_router)
     return application
 
 

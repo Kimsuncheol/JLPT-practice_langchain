@@ -135,6 +135,53 @@
           <button type="submit" id="tutor-send-btn">Ask Tutor</button>
         </form>
       </section>
+
+      <section class="card" aria-labelledby="word-explain-heading">
+        <h2 id="word-explain-heading">4. Word Explanation (Meanings, Examples &amp; Nuances)</h2>
+        <form onsubmit="event.preventDefault(); explainWord();" style="margin-bottom: 0.75rem;">
+          <div class="row" role="group" aria-label="Word explanation inputs">
+            <div class="form-field" style="flex: 1; min-width: 140px;">
+              <label for="word-input">Japanese Word / Expression</label>
+              <input id="word-input" type="text" maxlength="100" lang="ja" class="jp-text" placeholder="e.g., 準備, 優しい, 約束" />
+            </div>
+
+            <div class="form-field">
+              <label for="word-level">JLPT Level (Approx.)</label>
+              <select id="word-level" aria-label="Word JLPT Level">
+                {% for lvl in levels %}
+                <option value="{{ lvl }}">{{ lvl }} (Approx.)</option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <div class="form-field">
+              <label for="word-explanation-language">Language</label>
+              <select id="word-explanation-language" aria-label="Word Explanation Language">
+                {% for lang in languages %}
+                <option value="{{ lang }}">{{ lang }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+
+          <div class="row">
+            <div class="form-field" style="flex: 1;">
+              <label for="word-context-input">Optional Context Sentence (Disambiguates Meaning)</label>
+              <input id="word-context-input" type="text" maxlength="500" lang="ja" class="jp-text" placeholder="Optional: 会議の前に必要な資料を準備しておいてください。" />
+            </div>
+          </div>
+
+          <div class="row" style="margin-bottom: 0;">
+            <button type="submit" id="word-explain-btn">Explain Word</button>
+            <button type="button" id="word-clear-btn" class="secondary" onclick="clearWordExplanation()">Clear Word</button>
+          </div>
+        </form>
+
+        <div id="word-status" class="status-banner" role="status" aria-live="polite" style="display: none;"></div>
+        <div id="word-error" class="error-banner" role="alert" aria-live="assertive" style="display: none;"></div>
+
+        <div id="word-explanation-results" aria-live="polite"></div>
+      </section>
     </div>
   </main>
 

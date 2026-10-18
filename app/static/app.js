@@ -5,6 +5,7 @@ let selectedAnswers = {};
 let isQuizSubmitted = false;
 let activeTutorQuestionIndex = 0;
 let conversationHistory = [];
+let currentWordExplanation = null;
 let sessionSummary = {
   setsCompleted: 0,
   answeredCount: 0,
@@ -690,12 +691,381 @@ async function sendTutorQuestion() {
   }
 }
 
+async function explainWord() {
+  const wordInput = document.getElementById('word-input');
+  const contextInput = document.getElementById('word-context-input');
+  const levelSelect = document.getElementById('word-level');
+  const langSelect = document.getElementById('word-explanation-language');
+  const explainBtn = document.getElementById('word-explain-btn');
+
+  const word = wordInput ? wordInput.value.trim() : '';
+  const contextRaw = contextInput ? contextInput.value.trim() : '';
+  const context = contextRaw ? contextRaw : null;
+  const level = levelSelect ? levelSelect.value : 'N5';
+  const explanation_language = langSelect ? langSelect.value : 'English';
+
+  if (!word) {
+    setErrorBanner('word-error', 'Please enter a Japanese word or expression to explain.');
+    return;
+  }
+
+  setErrorBanner('word-error', '');
+  setStatusBanner(
+    'word-status',
+    'Loading: Generating word meanings, original examples, verified past-exam check, and nuances...'
+  );
+  if (explainBtn) {
+    explainBtn.disabled = true;
+    explainBtn.setAttribute('aria-busy', 'true');
+  }
+
+  try {
+    const res = await fetch('/api/words/explain', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store',
+      body: JSON.stringify({
+        word,
+        context,
+        level,
+        explanation_language
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setStatusBanner('word-status', '');
+      setErrorBanner('word-error', data.detail || 'Failed to explain word.');
+      return;
+    }
+    currentWordExplanation = data;
+    setStatusBanner('word-status', data.notice || 'Word explanation ready.');
+    renderWordExplanation();
+  } catch (err) {
+    setStatusBanner('word-status', '');
+    setErrorBanner('word-error', 'Network error while requesting word explanation.');
+  } finally {
+    if (explainBtn) {
+      explainBtn.disabled = false;
+      explainBtn.removeAttribute('aria-busy');
+    }
+  }
+}
+
+function renderWordExplanation() {
+  const container = document.getElementById('word-explanation-results');
+  if (!container) return;
+  container.innerHTML = '';
+
+  if (!currentWordExplanation) return;
+  const data = currentWordExplanation;
+
+  // 1. Meanings & Context Fit Section
+  const meaningsSection = document.createElement('section');
+  meaningsSection.id = 'word-meanings-section';
+  meaningsSection.className = 'question-card word-subpanel';
+
+  const meaningsHeader = document.createElement('h3');
+  meaningsHeader.textContent = '4a. Meanings, Reading & Context Disambiguation';
+  meaningsSection.appendChild(meaningsHeader);
+
+  const headwordLine = document.createElement('p');
+  const wordStrong = document.createElement('strong');
+  wordStrong.setAttribute('lang', 'ja');
+  wordStrong.className = 'jp-text';
+  wordStrong.textContent = `${data.word} 【${data.reading}】 `;
+  headwordLine.appendChild(wordStrong);
+
+  const levelBadge = document.createElement('span');
+  levelBadge.className = 'badge';
+  levelBadge.textContent = `${data.level} — ${data.approximate_difficulty_label || 'Approximate JLPT difficulty'}`;
+  headwordLine.appendChild(levelBadge);
+  meaningsSection.appendChild(headwordLine);
+
+  if (Array.isArray(data.alternate_readings) && data.alternate_readings.length > 0) {
+    const altReadP = document.createElement('p');
+    const altStrong = document.createElement('strong');
+    altStrong.textContent = 'Alternate / Ambiguous Readings: ';
+    altReadP.appendChild(altStrong);
+    const altSpan = document.createElement('span');
+    altSpan.setAttribute('lang', 'ja');
+    altSpan.className = 'jp-text';
+    altSpan.textContent = data.alternate_readings.join('、');
+    altReadP.appendChild(altSpan);
+    meaningsSection.appendChild(altReadP);
+  }
+
+  if (data.uncertainty_note || data.is_known_word === false) {
+    const uncBox = document.createElement('div');
+    uncBox.className = 'notice';
+    uncBox.textContent =
+      data.uncertainty_note ||
+      'Note: This word or reading may be unrecognized, rare, or context-dependent.';
+    meaningsSection.appendChild(uncBox);
+  }
+
+  if (data.context_fit_explanation) {
+    const ctxBox = document.createElement('div');
+    ctxBox.className = 'status-banner';
+    const ctxStrong = document.createElement('strong');
+    ctxStrong.textContent = 'Context Fit: ';
+    ctxBox.appendChild(ctxStrong);
+    ctxBox.appendChild(document.createTextNode(data.context_fit_explanation));
+    meaningsSection.appendChild(ctxBox);
+  }
+
+  const meaningsList = document.createElement('ol');
+  (data.meanings || []).forEach((m) => {
+    const li = document.createElement('li');
+    li.style.marginBottom = '0.65rem';
+
+    const posBadge = document.createElement('span');
+    posBadge.className = 'badge';
+    posBadge.textContent = m.part_of_speech;
+    li.appendChild(posBadge);
+
+    const defSpan = document.createElement('span');
+    defSpan.textContent = ` ${m.meaning}`;
+    li.appendChild(defSpan);
+
+    if (m.context_fit) {
+      const fitP = document.createElement('div');
+      fitP.style.fontSize = '0.88rem';
+      fitP.textContent = `Context note: ${m.context_fit}`;
+      li.appendChild(fitP);
+    }
+
+    if (Array.isArray(m.collocations) && m.collocations.length > 0) {
+      const colP = document.createElement('div');
+      colP.style.fontSize = '0.88rem';
+      colP.textContent = `Common collocations: ${m.collocations.join(' / ')}`;
+      li.appendChild(colP);
+    }
+
+    if (Array.isArray(m.grammar_patterns) && m.grammar_patterns.length > 0) {
+      const gramP = document.createElement('div');
+      gramP.style.fontSize = '0.88rem';
+      gramP.textContent = `Grammar patterns: ${m.grammar_patterns.join(' / ')}`;
+      li.appendChild(gramP);
+    }
+
+    meaningsList.appendChild(li);
+  });
+  meaningsSection.appendChild(meaningsList);
+  container.appendChild(meaningsSection);
+
+  // 2. Original AI-Generated Examples Section
+  const origExamplesSection = document.createElement('section');
+  origExamplesSection.id = 'word-original-examples-section';
+  origExamplesSection.className = 'question-card word-subpanel';
+
+  const origHeader = document.createElement('h3');
+  origHeader.textContent = '4b. Original AI-Generated Examples (Unofficial)';
+  origExamplesSection.appendChild(origHeader);
+
+  const origLabelNote = document.createElement('p');
+  origLabelNote.className = 'notice';
+  origLabelNote.textContent =
+    data.original_examples_label ||
+    'Original AI-generated examples (unofficial study material, separate from verified past JLPT exams).';
+  origExamplesSection.appendChild(origLabelNote);
+
+  (data.meanings || []).forEach((m, mIdx) => {
+    (m.examples || []).forEach((ex) => {
+      const exBox = document.createElement('div');
+      exBox.className = 'feedback-panel';
+      exBox.style.marginTop = '0.5rem';
+
+      const tagRow = document.createElement('div');
+      const senseBadge = document.createElement('span');
+      senseBadge.className = 'badge';
+      senseBadge.textContent = `Meaning ${mIdx + 1} · ${ex.source_label || 'Original AI-generated example'}`;
+      tagRow.appendChild(senseBadge);
+      exBox.appendChild(tagRow);
+
+      const jpLine = document.createElement('p');
+      jpLine.setAttribute('lang', 'ja');
+      jpLine.className = 'jp-text';
+      jpLine.style.margin = '0.35rem 0 0.15rem';
+      const jpStrong = document.createElement('strong');
+      jpStrong.textContent = ex.japanese;
+      jpLine.appendChild(jpStrong);
+      exBox.appendChild(jpLine);
+
+      const readLine = document.createElement('div');
+      readLine.setAttribute('lang', 'ja');
+      readLine.className = 'jp-text';
+      readLine.style.fontSize = '0.88rem';
+      readLine.textContent = `Reading (kana): ${ex.reading}`;
+      exBox.appendChild(readLine);
+
+      const transLine = document.createElement('div');
+      transLine.style.fontSize = '0.92rem';
+      transLine.textContent = `Translation: ${ex.translation}`;
+      exBox.appendChild(transLine);
+
+      const noteLine = document.createElement('div');
+      noteLine.style.fontSize = '0.88rem';
+      noteLine.textContent = `Usage note: ${ex.usage_note}`;
+      exBox.appendChild(noteLine);
+
+      origExamplesSection.appendChild(exBox);
+    });
+  });
+  container.appendChild(origExamplesSection);
+
+  // 3. Verified Examples from Past JLPT Exams Section (Curated Collection Only)
+  const verifiedSection = document.createElement('section');
+  verifiedSection.id = 'word-verified-examples-section';
+  verifiedSection.className = 'question-card word-subpanel';
+
+  const verHeader = document.createElement('h3');
+  verHeader.textContent = '4c. Verified Examples from Past JLPT Exams (Curated Source Collection)';
+  verifiedSection.appendChild(verHeader);
+
+  const verStatus = document.createElement('p');
+  verStatus.className = 'notice';
+  verStatus.textContent =
+    data.verified_examples_status ||
+    'No verified past JLPT exam examples are available for this word in the curated source collection.';
+  verifiedSection.appendChild(verStatus);
+
+  const verifiedList = data.verified_past_exam_examples || [];
+  verifiedList.forEach((vex) => {
+    const vBox = document.createElement('div');
+    vBox.className = 'passage-card';
+    vBox.style.marginTop = '0.5rem';
+
+    const vBadge = document.createElement('span');
+    vBadge.className = 'badge';
+    vBadge.textContent = 'Verified Past JLPT Exam Record (Curated Collection)';
+    vBox.appendChild(vBadge);
+
+    const vJp = document.createElement('p');
+    vJp.setAttribute('lang', 'ja');
+    vJp.className = 'jp-text';
+    vJp.style.margin = '0.35rem 0 0.15rem';
+    const vStrong = document.createElement('strong');
+    vStrong.textContent = vex.japanese;
+    vJp.appendChild(vStrong);
+    vBox.appendChild(vJp);
+
+    if (vex.reading) {
+      const vRead = document.createElement('div');
+      vRead.setAttribute('lang', 'ja');
+      vRead.className = 'jp-text';
+      vRead.style.fontSize = '0.88rem';
+      vRead.textContent = `Reading: ${vex.reading}`;
+      vBox.appendChild(vRead);
+    }
+
+    const provLine = document.createElement('div');
+    provLine.style.fontSize = '0.86rem';
+    const metaParts = [
+      `Source: ${vex.source_title}`,
+      `Ref: ${vex.source_reference}`
+    ];
+    if (vex.exam_year) metaParts.push(`Year: ${vex.exam_year}`);
+    if (vex.exam_level) metaParts.push(`Level: ${vex.exam_level}`);
+    if (vex.question_or_page_ref) metaParts.push(`Item: ${vex.question_or_page_ref}`);
+    provLine.textContent = metaParts.join(' · ');
+    vBox.appendChild(provLine);
+
+    if (vex.source_url && /^https?:\/\//i.test(vex.source_url)) {
+      const linkLine = document.createElement('div');
+      linkLine.style.fontSize = '0.84rem';
+      const link = document.createElement('a');
+      link.href = vex.source_url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = vex.source_url;
+      linkLine.appendChild(link);
+      vBox.appendChild(linkLine);
+    }
+
+    verifiedSection.appendChild(vBox);
+  });
+  container.appendChild(verifiedSection);
+
+  // 4. Nuances, Register & Usage Contrasts Section
+  const nuancesSection = document.createElement('section');
+  nuancesSection.id = 'word-nuances-section';
+  nuancesSection.className = 'question-card word-subpanel';
+
+  const nuancesHeader = document.createElement('h3');
+  nuancesHeader.textContent = '4d. Nuances, Register, Synonyms & Usage Contrasts';
+  nuancesSection.appendChild(nuancesHeader);
+
+  if (data.register_and_formality) {
+    const regP = document.createElement('p');
+    const regStrong = document.createElement('strong');
+    regStrong.textContent = 'Formality, Register & Typical Situations: ';
+    regP.appendChild(regStrong);
+    regP.appendChild(document.createTextNode(data.register_and_formality));
+    nuancesSection.appendChild(regP);
+  }
+
+  const nuanceUl = document.createElement('ul');
+  (data.nuances || []).forEach((nText) => {
+    const li = document.createElement('li');
+    li.textContent = nText;
+    nuanceUl.appendChild(li);
+  });
+  nuancesSection.appendChild(nuanceUl);
+
+  if (Array.isArray(data.synonyms_and_contrasts) && data.synonyms_and_contrasts.length > 0) {
+    const synTitle = document.createElement('p');
+    const synStrong = document.createElement('strong');
+    synStrong.textContent = 'Synonyms & Easily Confused Words:';
+    synTitle.appendChild(synStrong);
+    nuancesSection.appendChild(synTitle);
+
+    const synUl = document.createElement('ul');
+    data.synonyms_and_contrasts.forEach((syn) => {
+      const li = document.createElement('li');
+      li.textContent = `${syn.term}: ${syn.comparison}`;
+      synUl.appendChild(li);
+    });
+    nuancesSection.appendChild(synUl);
+  }
+
+  if (Array.isArray(data.natural_vs_unnatural) && data.natural_vs_unnatural.length > 0) {
+    const natTitle = document.createElement('p');
+    const natStrong = document.createElement('strong');
+    natStrong.textContent = 'Natural vs. Unnatural Usage:';
+    natTitle.appendChild(natStrong);
+    nuancesSection.appendChild(natTitle);
+
+    const natUl = document.createElement('ul');
+    data.natural_vs_unnatural.forEach((pair) => {
+      const li = document.createElement('li');
+      li.textContent = `✓ Natural: ${pair.natural_example} | ✗ Unnatural: ${pair.unnatural_example} — ${pair.explanation}`;
+      natUl.appendChild(li);
+    });
+    nuancesSection.appendChild(natUl);
+  }
+
+  container.appendChild(nuancesSection);
+}
+
+function clearWordExplanation() {
+  currentWordExplanation = null;
+  setStatusBanner('word-status', '');
+  setErrorBanner('word-error', '');
+  const wordInput = document.getElementById('word-input');
+  const contextInput = document.getElementById('word-context-input');
+  const resultsEl = document.getElementById('word-explanation-results');
+  if (wordInput) wordInput.value = '';
+  if (contextInput) contextInput.value = '';
+  if (resultsEl) resultsEl.innerHTML = '';
+}
+
 function resetSession() {
   currentPracticeSet = null;
   selectedAnswers = {};
   isQuizSubmitted = false;
   activeTutorQuestionIndex = 0;
   conversationHistory = [];
+  currentWordExplanation = null;
   sessionSummary = {
     setsCompleted: 0,
     answeredCount: 0,
@@ -706,10 +1076,13 @@ function resetSession() {
   setErrorBanner('quiz-error', '');
   setStatusBanner('tutor-status', '');
   setErrorBanner('tutor-error', '');
+  setStatusBanner('word-status', '');
+  setErrorBanner('word-error', '');
   document.getElementById('quiz-container').innerHTML = '';
   document.getElementById('quiz-score-summary').innerHTML = '';
   document.getElementById('quiz-actions').style.display = 'none';
   document.getElementById('chat-input').value = '';
+  clearWordExplanation();
   updateTutorQuestionSelector();
   renderChat();
   renderSessionSummary();

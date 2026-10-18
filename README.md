@@ -15,18 +15,22 @@ A privacy-first, stateless Japanese Language Proficiency Test (JLPT N5–N1) pra
 ├── app/
 │   ├── __init__.py
 │   ├── config.py         # Ollama environment config & mandatory tracing disablement
+│   ├── data/
+│   │   └── verified_exam_sources.json # Curated reference collection for verified past-exam examples
 │   ├── main.py           # FastAPI application entrypoint, StaticFiles, & no-store middleware
 │   ├── prompts.py        # Modular LangChain ChatPromptTemplate definitions
-│   ├── routes.py         # HTTP endpoints (/health, /api/practice/generate, /api/tutor, Jinja2 UI)
+│   ├── routes.py         # HTTP endpoints (/health, /api/practice/*, /api/tutor/*, Jinja2 UI)
 │   ├── schemas.py        # Pydantic v2 request/response schemas & structural validation
 │   ├── services.py       # Async ChatOllama services, structured output fallback, & local grading
+│   ├── words.py          # Word explanation endpoint (/api/words/explain) & curated source provenance
 │   ├── static/
 │   │   ├── app.js        # Minimal JS keeping study state exclusively in browser memory
 │   │   └── styles.css    # Responsive CSS with Japanese typography & keyboard focus styles
 │   └── templates/
-│       └── index.html    # Responsive Jinja2 UI template
+│       └── index.html    # Responsive Jinja2 UI template (quiz, tutor, & word explanation panel)
 └── tests/
-    └── test_app.py       # Automated tests using a fake model for validation, grading, errors, and privacy
+    ├── test_app.py       # Automated tests for practice, follow-ups, tutor, grading, and privacy
+    └── test_words.py     # Automated tests for word explanations, curated provenance, and UI panel
 ```
 
 ## Mandatory Privacy & Self-Study Guarantees
@@ -223,3 +227,122 @@ model. Existing request limits and ephemeral history handling are unchanged.
 Redeploy this backend before using the combined response in the Flutter app.
 The generated OpenAPI specification and `output/pdf/jlpt-practice-api-reference.pdf`
 describe the updated contract.
+
+## Word explanation service
+
+`POST /api/words/explain` (alias `POST /words/explain`) explains a Japanese word or expression using Ollama (`ChatOllama`) and attaches verified past-exam examples strictly from the project owner's local curated JSON source collection (`app/data/verified_exam_sources.json`).
+There is no application authentication on this endpoint, matching existing routes.
+It makes one bounded model invocation without automatic repair calls. No submitted words, context, or generated explanations are saved or logged by this service.
+The browser interface at `GET /` includes **Section 4: Word Explanation (Meanings, Examples & Nuances)**, which renders meanings, original AI-generated examples, verified past-exam examples, and nuances in four clearly distinguished panels while keeping state exclusively in JavaScript runtime memory.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/words/explain \
+  -H 'Content-Type: application/json' \
+  -d '{"word":"準備","context":"会議の前に必要な資料を準備しておいてください。","level":"N4","explanation_language":"English"}'
+```
+
+### Request schema (`WordExplainRequest`)
+
+Unknown fields are rejected (`extra="forbid"`) and surrounding whitespace is trimmed:
+
+| Field | Required / default | Constraint |
+| --- | --- | --- |
+| `word` | Required | 1–100 characters after trimming |
+| `context` | Optional, `null` | Up to 500 characters |
+| `level` | `N5` | `N5`, `N4`, `N3`, `N2`, `N1` (approximate difficulty) |
+| `explanation_language` | `English` | `English`, `Korean`, `Japanese`; `en`/`ko`/`ja` and case variants accepted |
+
+### Successful response (`WordExplainResponse`, HTTP 200)
+
+```json
+{
+  "word": "準備",
+  "context": "会議の前に必要な資料を準備しておいてください。",
+  "level": "N4",
+  "explanation_language": "English",
+  "reading": "じゅんび",
+  "is_known_word": true,
+  "alternate_readings": [],
+  "uncertainty_note": null,
+  "context_fit_explanation": "In the provided meeting context, 準備 refers to preparing materials in advance.",
+  "meanings": [
+    {
+      "meaning": "Preparation; arrangements; getting ready",
+      "part_of_speech": "Noun / する verb",
+      "context_fit": "Directly fits preparing meeting documents beforehand.",
+      "collocations": ["準備をする", "心の準備", "準備が整う"],
+      "grammar_patterns": ["〜の準備をする", "〜を準備しておく"],
+      "examples": [
+        {
+          "japanese": "旅行の準備はもう終わりましたか。",
+          "reading": "りょこうのじゅんびはもうおわりましたか。",
+          "translation": "Have you finished preparing for the trip already?",
+          "usage_note": "Used with の to modify 準備 as a noun.",
+          "ai_generated": true,
+          "source_label": "Original AI-generated example (unofficial)"
+        }
+      ]
+    }
+  ],
+  "nuances": [
+    "準備 focuses on concrete, practical preparations before an event or task.",
+    "Compared with 用意 (ようい), 準備 often implies broader multi-step readiness."
+  ],
+  "register_and_formality": "Neutral register suitable for both everyday conversation and formal business contexts.",
+  "synonyms_and_contrasts": [
+    {
+      "term": "用意 (ようい)",
+      "comparison": "用意 often focuses on having specific items ready to use immediately, whereas 準備 covers broader advance preparation."
+    }
+  ],
+  "natural_vs_unnatural": [
+    {
+      "natural_example": "会議の資料を準備しておいた。",
+      "unnatural_example": "会議の資料を身支度しておいた。",
+      "explanation": "身支度 is only for personal grooming/dressing, not business documents."
+    }
+  ],
+  "approximate_difficulty_label": "Approximate JLPT difficulty (unofficial estimate; no official JLPT vocabulary list is published)",
+  "original_examples_label": "Original AI-generated examples (unofficial study material, separate from verified past JLPT exams)",
+  "verified_past_exam_examples": [
+    {
+      "source_id": "jlpt-past-2008-l3-q12",
+      "word": "準備",
+      "japanese": "会議の前に必要な資料を準備しておいてください。",
+      "reading": "かいぎのまえにひつようなしりょうをじゅんびしておいてください。",
+      "source_title": "Owner-Curated JLPT Past Exam Archive (Permitted Excerpts)",
+      "source_reference": "JEES / Japan Foundation Historical JLPT Past Exam Compilation, 2008 Level 3 Vocabulary, Question 12, p. 6",
+      "source_url": "https://www.jlpt.jp/reference/books.html",
+      "exam_year": 2008,
+      "exam_level": "N4",
+      "question_or_page_ref": "Vocabulary Section 2, Question 12, p. 6",
+      "source_type": "past_exam",
+      "verified_from_curated_collection": true,
+      "ai_generated": false
+    }
+  ],
+  "verified_examples_available": true,
+  "verified_examples_status": "Found 1 verified past JLPT exam example(s) in the curated source collection.",
+  "ai_generated": true,
+  "notice": "AI-generated explanation; linguistic accuracy is not guaranteed. JLPT difficulty is approximate rather than an official word-level classification."
+}
+```
+
+### Contract & Provenance Guarantees
+
+1. **Meanings & Context Disambiguation**:
+   - Returns primary kana `reading`, `alternate_readings` (when ambiguous), `is_known_word`, and `uncertainty_note` (acknowledging unknown words or uncertain readings rather than inventing facts).
+   - `meanings` contains 1–4 distinct senses, each with `part_of_speech`, optional `context_fit`, `collocations` (up to 6), `grammar_patterns` (up to 6), and 1–3 original AI-generated `examples`.
+   - `context_fit_explanation` explains which meaning fits the optional user-provided `context`.
+2. **Original vs. Verified Past-Exam Examples**:
+   - Original examples inside `meanings[].examples` are always labeled with `ai_generated: true` and `source_label: "Original AI-generated example (unofficial)"`.
+   - `verified_past_exam_examples` is populated **exclusively server-side** from `app/data/verified_exam_sources.json` (`CuratedExamSourceRecord`). The LLM output schema (`WordExplanationContent`) uses `extra="forbid"` and has no field for verified exam examples, so model-generated text can never become a verified exam citation.
+   - Each verified past-exam record includes `source_title`, `source_reference`, optional `source_url`, and `exam_year`, `exam_level`, and `question_or_page_ref` when known.
+   - Official practice samples (`source_type="official_practice_sample"`) are never labeled or returned as past-exam questions (`source_type="past_exam"`).
+   - When the curated collection is empty or has no verified past-exam match for a word, `verified_past_exam_examples` is `[]`, `verified_examples_available` is `false`, and `verified_examples_status` provides a clear availability message.
+3. **Nuances & Approximate Difficulty**:
+   - Includes `nuances` (1–5 summary points), `register_and_formality`, `synonyms_and_contrasts`, `natural_vs_unnatural` usage pairs, and `approximate_difficulty_label`.
+4. **Headers & Error Responses**:
+   - All responses (including errors) include `Cache-Control: no-store` and `Pragma: no-cache`.
+   - Errors: `413` oversized body, `422` invalid request fields, `429` upstream rate limit, `502` malformed model output or generation failure, `503` unavailable or misconfigured Ollama, and `504` model timeout.
+

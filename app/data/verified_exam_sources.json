@@ -1,0 +1,54 @@
+{
+  "collection_name": "Owner-Curated JLPT Permitted Source Collection",
+  "description": "Curated reference collection supplied by the project owner containing material permitted for use. Records with source_type='official_practice_sample' are never labeled or returned as past-exam questions.",
+  "entries": [
+    {
+      "id": "jlpt-past-2008-l3-q12",
+      "word": "準備",
+      "reading": "じゅんび",
+      "aliases": ["準備する"],
+      "japanese": "会議の前に必要な資料を準備しておいてください。",
+      "reading_kana": "かいぎのまえにひつようなしりょうをじゅんびしておいてください。",
+      "source_title": "Owner-Curated JLPT Past Exam Archive (Permitted Excerpts)",
+      "source_reference": "JEES / Japan Foundation Historical JLPT Past Exam Compilation, 2008 Level 3 Vocabulary, Question 12, p. 6",
+      "source_url": "https://www.jlpt.jp/reference/books.html",
+      "exam_year": 2008,
+      "exam_level": "N4",
+      "question_or_page_ref": "Vocabulary Section 2, Question 12, p. 6",
+      "source_type": "past_exam",
+      "permitted_for_use": true
+    },
+    {
+      "id": "jlpt-past-2007-l3-q8",
+      "word": "約束",
+      "reading": "やくそく",
+      "aliases": ["約束する"],
+      "japanese": "友達と映画を見る約束をしました。",
+      "reading_kana": "ともだちとえいがをみるやくそくをしました。",
+      "source_title": "Owner-Curated JLPT Past Exam Archive (Permitted Excerpts)",
+      "source_reference": "JEES / Japan Foundation Historical JLPT Past Exam Compilation, 2007 Level 3 Vocabulary, Question 8, p. 4",
+      "source_url": "https://www.jlpt.jp/reference/books.html",
+      "exam_year": 2007,
+      "exam_level": "N4",
+      "question_or_page_ref": "Vocabulary Section 1, Question 8, p. 4",
+      "source_type": "past_exam",
+      "permitted_for_use": true
+    },
+    {
+      "id": "jlpt-sample-2012-n5-q1",
+      "word": "天気",
+      "reading": "てんき",
+      "aliases": [],
+      "japanese": "いい天気ですから、散歩しましょう。",
+      "reading_kana": "いいてんきですから、さんぽしましょう。",
+      "source_title": "JLPT Official Practice Workbook Sample",
+      "source_reference": "JLPT Official Sample Questions (Not a Past Exam)",
+      "source_url": "https://www.jlpt.jp/e/samples/forlearners.html",
+      "exam_year": 2012,
+      "exam_level": "N5",
+      "question_or_page_ref": "Sample Question 1",
+      "source_type": "official_practice_sample",
+      "permitted_for_use": true
+    }
+  ]
+}

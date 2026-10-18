@@ -405,6 +405,56 @@
           }
         }
       }
+    },
+    "/api/words/explain": {
+      "post": {
+        "tags": [
+          "words"
+        ],
+        "summary": "Word Explanation",
+        "description": "Explain word meanings, original examples, verified past-exam examples, and nuances without saving content.",
+        "operationId": "word_explanation_api_words_explain_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WordExplainRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WordExplainResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds configured byte limit."
+          },
+          "422": {
+            "description": "Invalid request fields."
+          },
+          "429": {
+            "description": "Ollama rate limit exceeded."
+          },
+          "502": {
+            "description": "Malformed model output or model generation failure."
+          },
+          "503": {
+            "description": "Ollama service/model unavailable or misconfigured."
+          },
+          "504": {
+            "description": "Model request timed out."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1350,6 +1400,32 @@
         "title": "SelectedPracticeQuestionContext",
         "description": "Bounded context for the single selected practice item sent to POST /api/tutor."
       },
+      "SynonymComparison": {
+        "properties": {
+          "term": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Term",
+            "description": "Synonym or easily confused word (with kana reading)."
+          },
+          "comparison": {
+            "type": "string",
+            "maxLength": 1200,
+            "minLength": 1,
+            "title": "Comparison",
+            "description": "Explanation of differences in meaning, nuance, kanji, or context."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "term",
+          "comparison"
+        ],
+        "title": "SynonymComparison",
+        "description": "Comparison between the target word and a synonym or easily confused word."
+      },
       "TutorChatRequest": {
         "properties": {
           "level": {
@@ -1541,6 +1617,40 @@
         "title": "TutorResponse",
         "description": "Stateless tutor response for POST /api/tutor."
       },
+      "UsageContrast": {
+        "properties": {
+          "natural_example": {
+            "type": "string",
+            "maxLength": 1200,
+            "minLength": 1,
+            "title": "Natural Example",
+            "description": "Natural Japanese usage."
+          },
+          "unnatural_example": {
+            "type": "string",
+            "maxLength": 1200,
+            "minLength": 1,
+            "title": "Unnatural Example",
+            "description": "Unnatural or awkward Japanese usage."
+          },
+          "explanation": {
+            "type": "string",
+            "maxLength": 1200,
+            "minLength": 1,
+            "title": "Explanation",
+            "description": "Explanation of why the natural example works and the unnatural one does not."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "natural_example",
+          "unnatural_example",
+          "explanation"
+        ],
+        "title": "UsageContrast",
+        "description": "Natural versus unnatural Japanese usage comparison with explanation."
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -1610,6 +1720,507 @@
         "type": "object",
         "title": "ValidationReport",
         "description": "Explicit separation between structural validation and linguistic correctness."
+      },
+      "VerifiedPastExamExample": {
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Source Id"
+          },
+          "word": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Word"
+          },
+          "japanese": {
+            "type": "string",
+            "maxLength": 1200,
+            "minLength": 1,
+            "title": "Japanese",
+            "description": "Exact Japanese sentence retrieved from the curated past-exam collection."
+          },
+          "reading": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reading",
+            "description": "Kana reading from the curated source record when available."
+          },
+          "source_title": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Source Title",
+            "description": "Curated source title."
+          },
+          "source_reference": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Source Reference",
+            "description": "Source URL or document reference."
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url",
+            "description": "Optional direct URL when known."
+          },
+          "exam_year": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2100.0,
+                "minimum": 1984.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exam Year",
+            "description": "Past exam year when known."
+          },
+          "exam_level": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JLPTLevel"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "JLPT level of the past exam when known."
+          },
+          "question_or_page_ref": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 300,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question Or Page Ref",
+            "description": "Question number or page reference when known."
+          },
+          "source_type": {
+            "type": "string",
+            "const": "past_exam",
+            "title": "Source Type",
+            "description": "Strictly 'past_exam'; official practice samples are never labeled as past-exam questions.",
+            "default": "past_exam"
+          },
+          "verified_from_curated_collection": {
+            "type": "boolean",
+            "const": true,
+            "title": "Verified From Curated Collection",
+            "default": true
+          },
+          "ai_generated": {
+            "type": "boolean",
+            "const": false,
+            "title": "Ai Generated",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_id",
+          "word",
+          "japanese",
+          "source_title",
+          "source_reference"
+        ],
+        "title": "VerifiedPastExamExample",
+        "description": "Server-attached verified example from a past JLPT exam with full provenance.\n\nNever populated from model output. Official practice samples are excluded."
+      },
+      "WordExample": {
+        "properties": {
+          "japanese": {
+            "type": "string",
+            "maxLength": 1200,
+            "minLength": 1,
+            "title": "Japanese",
+            "description": "Original AI-generated Japanese example sentence."
+          },
+          "reading": {
+            "type": "string",
+            "maxLength": 1200,
+            "minLength": 1,
+            "title": "Reading",
+            "description": "Kana reading of the example sentence."
+          },
+          "translation": {
+            "type": "string",
+            "maxLength": 1200,
+            "minLength": 1,
+            "title": "Translation",
+            "description": "Translation in the requested explanation language."
+          },
+          "usage_note": {
+            "type": "string",
+            "maxLength": 1200,
+            "minLength": 1,
+            "title": "Usage Note",
+            "description": "Usage note in the requested explanation language."
+          },
+          "ai_generated": {
+            "type": "boolean",
+            "const": true,
+            "title": "Ai Generated",
+            "description": "Always True for model-generated original examples.",
+            "default": true
+          },
+          "source_label": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Source Label",
+            "description": "Explicit label distinguishing original AI examples from verified past exams.",
+            "default": "Original AI-generated example (unofficial)"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "japanese",
+          "reading",
+          "translation",
+          "usage_note"
+        ],
+        "title": "WordExample",
+        "description": "Original AI-generated example sentence for a word meaning (never a past-exam citation)."
+      },
+      "WordExplainRequest": {
+        "properties": {
+          "word": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Word",
+            "description": "Japanese word or expression to explain."
+          },
+          "context": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context",
+            "description": "Optional sentence or phrase to disambiguate usage."
+          },
+          "level": {
+            "$ref": "#/components/schemas/JLPTLevel",
+            "description": "Approximate target JLPT level (N5 through N1).",
+            "default": "N5"
+          },
+          "explanation_language": {
+            "$ref": "#/components/schemas/ExplanationLanguage",
+            "description": "Explanation language: English, Korean, or Japanese.",
+            "default": "English"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "word"
+        ],
+        "title": "WordExplainRequest",
+        "description": "Bounded request schema for POST /api/words/explain."
+      },
+      "WordExplainResponse": {
+        "properties": {
+          "reading": {
+            "type": "string",
+            "maxLength": 1200,
+            "minLength": 1,
+            "title": "Reading",
+            "description": "Primary kana reading of the word."
+          },
+          "is_known_word": {
+            "type": "boolean",
+            "title": "Is Known Word",
+            "description": "False when the word is unknown, coined, or cannot be confirmed.",
+            "default": true
+          },
+          "alternate_readings": {
+            "items": {
+              "type": "string",
+              "maxLength": 300,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 5,
+            "title": "Alternate Readings",
+            "description": "Additional valid kana readings when the word has ambiguous readings."
+          },
+          "uncertainty_note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uncertainty Note",
+            "description": "Explicit note when the word is unknown, rare, or has ambiguous readings/usage."
+          },
+          "context_fit_explanation": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Fit Explanation",
+            "description": "Explanation of which meaning fits the optional user-provided context."
+          },
+          "meanings": {
+            "items": {
+              "$ref": "#/components/schemas/WordMeaning"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 1,
+            "title": "Meanings",
+            "description": "1–4 distinct common meanings of the word."
+          },
+          "nuances": {
+            "items": {
+              "type": "string",
+              "maxLength": 1200,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Nuances",
+            "description": "1–5 key nuance takeaways (formality, register, connotation, situations, contrasts)."
+          },
+          "register_and_formality": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Register And Formality",
+            "description": "Detailed explanation of formality, spoken vs. written register, connotation, and typical situations."
+          },
+          "synonyms_and_contrasts": {
+            "items": {
+              "$ref": "#/components/schemas/SynonymComparison"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "title": "Synonyms And Contrasts",
+            "description": "Comparisons with relevant synonyms and easily confused words."
+          },
+          "natural_vs_unnatural": {
+            "items": {
+              "$ref": "#/components/schemas/UsageContrast"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Natural Vs Unnatural",
+            "description": "Natural vs. unnatural usage examples with explanations when helpful."
+          },
+          "follow_up_questions": {
+            "items": {
+              "type": "string",
+              "maxLength": 500,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Follow Up Questions",
+            "description": "Exactly three distinct follow-up questions in the requested explanation language, generated in the same model invocation as the explanation."
+          },
+          "word": {
+            "type": "string",
+            "title": "Word"
+          },
+          "context": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context"
+          },
+          "level": {
+            "$ref": "#/components/schemas/JLPTLevel"
+          },
+          "explanation_language": {
+            "$ref": "#/components/schemas/ExplanationLanguage"
+          },
+          "approximate_difficulty_label": {
+            "type": "string",
+            "title": "Approximate Difficulty Label",
+            "default": "Approximate JLPT difficulty (unofficial estimate; no official JLPT vocabulary list is published)"
+          },
+          "original_examples_label": {
+            "type": "string",
+            "title": "Original Examples Label",
+            "default": "Original AI-generated examples (unofficial study material, separate from verified past JLPT exams)"
+          },
+          "verified_past_exam_examples": {
+            "items": {
+              "$ref": "#/components/schemas/VerifiedPastExamExample"
+            },
+            "type": "array",
+            "title": "Verified Past Exam Examples",
+            "description": "Verified examples from past JLPT exams attached server-side from the curated source collection."
+          },
+          "verified_examples_available": {
+            "type": "boolean",
+            "title": "Verified Examples Available",
+            "description": "True only when verified past-exam examples were found in the curated collection.",
+            "default": false
+          },
+          "verified_examples_status": {
+            "type": "string",
+            "title": "Verified Examples Status",
+            "description": "Human-readable availability message for the verified past-exam examples section.",
+            "default": "No verified past JLPT exam examples are available for this word in the curated source collection."
+          },
+          "ai_generated": {
+            "type": "boolean",
+            "const": true,
+            "title": "Ai Generated",
+            "default": true
+          },
+          "notice": {
+            "type": "string",
+            "title": "Notice",
+            "default": "AI-generated explanation; linguistic accuracy is not guaranteed. JLPT difficulty is approximate rather than an official word-level classification."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "reading",
+          "meanings",
+          "nuances",
+          "follow_up_questions",
+          "word",
+          "level",
+          "explanation_language"
+        ],
+        "title": "WordExplainResponse",
+        "description": "Complete response for POST /api/words/explain combining AI explanation with server-side exam provenance."
+      },
+      "WordMeaning": {
+        "properties": {
+          "meaning": {
+            "type": "string",
+            "maxLength": 1200,
+            "minLength": 1,
+            "title": "Meaning",
+            "description": "Clear definition in the requested explanation language."
+          },
+          "part_of_speech": {
+            "type": "string",
+            "maxLength": 1200,
+            "minLength": 1,
+            "title": "Part Of Speech",
+            "description": "Part of speech (e.g., い-adjective, noun / する verb)."
+          },
+          "context_fit": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Fit",
+            "description": "How this specific sense fits or does not fit the optional user-provided context."
+          },
+          "collocations": {
+            "items": {
+              "type": "string",
+              "maxLength": 300,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 6,
+            "title": "Collocations",
+            "description": "Common collocations (word pairings) for this meaning."
+          },
+          "grammar_patterns": {
+            "items": {
+              "type": "string",
+              "maxLength": 300,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 6,
+            "title": "Grammar Patterns",
+            "description": "Relevant grammatical patterns or constructions used with this meaning."
+          },
+          "examples": {
+            "items": {
+              "$ref": "#/components/schemas/WordExample"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Examples",
+            "description": "1–3 original AI-generated example sentences for this meaning."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "meaning",
+          "part_of_speech",
+          "examples"
+        ],
+        "title": "WordMeaning",
+        "description": "Single distinct meaning of the word with POS, collocations, grammar patterns, and original examples."
       }
     }
   }

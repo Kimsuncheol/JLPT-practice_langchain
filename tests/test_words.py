@@ -65,6 +65,11 @@ DETAILED_CONTENT: dict[str, Any] = {
             "explanation": "身支度 is only for personal grooming/dressing, not business documents.",
         }
     ],
+    "follow_up_questions": [
+        "準備와 用意는 어떻게 다른가요?",
+        "準備를 사용한 다른 예문을 알려 주세요.",
+        "「準備中」는 어떤 상황에서 쓰나요?",
+    ],
 }
 
 MINIMAL_CONTENT: dict[str, Any] = {
@@ -85,6 +90,11 @@ MINIMAL_CONTENT: dict[str, Any] = {
     ],
     "nuances": [
         "優しい describes kindness; 易しい describes ease despite the same reading."
+    ],
+    "follow_up_questions": [
+        "How is 優しい different from 親切?",
+        "Can you give another example of 優しい?",
+        "Why is 易しい written differently?",
     ],
 }
 
@@ -269,6 +279,11 @@ def test_unknown_word_and_ambiguous_reading_acknowledgment() -> None:
         "nuances": [
             "Because the word is unrecognized, verify the kanji or surrounding context."
         ],
+        "follow_up_questions": [
+            "この言葉の正しい読み方は何ですか。",
+            "似た意味の確認済みの言葉はありますか。",
+            "どの辞書でこの言葉を確認できますか。",
+        ],
     }
     client, _ = client_for(unknown_word_output)
     res = client.post(
@@ -315,6 +330,14 @@ def test_invalid_requests(payload: dict[str, Any]) -> None:
                 MINIMAL_CONTENT["meanings"][0],
             ],
         },
+        # Follow-up questions are required: missing, too few/many, duplicate, blank or oversized.
+        {k: v for k, v in MINIMAL_CONTENT.items() if k != "follow_up_questions"},
+        {**MINIMAL_CONTENT, "follow_up_questions": []},
+        {**MINIMAL_CONTENT, "follow_up_questions": ["Why?", "How?"]},
+        {**MINIMAL_CONTENT, "follow_up_questions": ["Why?", "How?", "When?", "Where?"]},
+        {**MINIMAL_CONTENT, "follow_up_questions": ["Why?", "why?", "How?"]},
+        {**MINIMAL_CONTENT, "follow_up_questions": ["Why?", "   ", "How?"]},
+        {**MINIMAL_CONTENT, "follow_up_questions": ["Why?", "How?", "x" * 501]},
     ],
 )
 def test_malformed_outputs(output: dict[str, Any]) -> None:
@@ -323,6 +346,47 @@ def test_malformed_outputs(output: dict[str, Any]) -> None:
     assert response.status_code == 502
     assert len(calls) == 1
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_word_explanation_returns_follow_up_questions_in_one_model_call() -> None:
+    """Explanation and follow-up questions come from a single model invocation."""
+    client, calls = client_for(DETAILED_CONTENT)
+    response = client.post(
+        "/api/words/explain",
+        json={"word": "準備", "level": "N4", "explanation_language": "Korean"},
+    )
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+
+    body = response.json()
+    assert body["follow_up_questions"] == DETAILED_CONTENT["follow_up_questions"]
+    assert len(body["follow_up_questions"]) == 3
+    assert len(set(body["follow_up_questions"])) == 3
+
+    # Exactly one model call produced the explanation and the follow-ups together.
+    assert len(calls) == 1
+    system_prompt = calls[0][0].content
+    assert "follow_up_questions" in system_prompt
+    assert "exactly 3 distinct" in system_prompt
+    assert "Korean" in system_prompt
+
+
+def test_word_follow_up_questions_are_not_verified_citations_or_logged(caplog) -> None:
+    """Follow-ups are plain generated text: never provenance, and never logged."""
+    caplog.set_level(logging.DEBUG)
+    secret = "SECRET_WORD_FOLLOW_UP_QUESTION_555?"
+    output = {
+        **DETAILED_CONTENT,
+        "follow_up_questions": [secret, "Second question?", "Third question?"],
+    }
+    client, _ = client_for(output, sources=[])
+    response = client.post("/api/words/explain", json={"word": "準備"})
+    assert response.status_code == 200
+    body = response.json()
+    assert secret in body["follow_up_questions"]
+    assert body["verified_past_exam_examples"] == []
+    assert body["verified_examples_available"] is False
+    assert secret not in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -364,3 +428,4 @@ def test_word_explanation_panel_in_browser_ui() -> None:
     assert "word-original-examples-section" in html
     assert "word-verified-examples-section" in html
     assert "word-nuances-section" in html
+    assert "word-follow-up-section" in html

@@ -1045,6 +1045,26 @@ function renderWordExplanation() {
   }
 
   container.appendChild(nuancesSection);
+
+  // 5. AI-generated follow-up questions (generated in the same call as the explanation)
+  if (Array.isArray(data.follow_up_questions) && data.follow_up_questions.length > 0) {
+    const followUpSection = document.createElement('section');
+    followUpSection.id = 'word-follow-up-section';
+    followUpSection.className = 'question-card word-subpanel';
+
+    const followUpHeader = document.createElement('h3');
+    followUpHeader.textContent = '4e. Suggested Follow-Up Questions (AI-Generated)';
+    followUpSection.appendChild(followUpHeader);
+
+    const followUpList = document.createElement('ul');
+    data.follow_up_questions.forEach((questionText) => {
+      const li = document.createElement('li');
+      li.textContent = questionText;
+      followUpList.appendChild(li);
+    });
+    followUpSection.appendChild(followUpList);
+    container.appendChild(followUpSection);
+  }
 }
 
 function clearWordExplanation() {

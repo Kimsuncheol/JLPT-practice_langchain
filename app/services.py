@@ -57,6 +57,7 @@ from app.schemas import (
     SelectedPracticeQuestionContext,
     TutorChatRequest,
     TutorChatResponse,
+    TutorGeneratedContent,
     TutorRequest,
     TutorResponse,
     compute_stable_question_id,
@@ -880,28 +881,33 @@ async def answer_practice_item_tutor_question(
             ) from None
         raise
 
-    if isinstance(ai_output, AIMessage):
-        reply_text = (
-            ai_output.content
-            if isinstance(ai_output.content, str)
-            else str(ai_output.content)
-        )
-    elif isinstance(ai_output, str):
-        reply_text = ai_output
-    elif isinstance(ai_output, dict) and "reply" in ai_output:
-        reply_text = str(ai_output["reply"])
-    else:
-        reply_text = str(getattr(ai_output, "content", ai_output))
-
-    reply_text = reply_text.strip()
-    if not reply_text:
-        raise StructuralValidationError("Tutor model returned an empty response.")
+    # No follow-up model call or JSON-repair call: both parts must arrive
+    # atomically from the single invocation above.
+    try:
+        if isinstance(ai_output, TutorGeneratedContent):
+            generated = ai_output
+        elif isinstance(ai_output, dict):
+            generated = TutorGeneratedContent.model_validate(ai_output)
+        else:
+            raw = ai_output.content if isinstance(ai_output, AIMessage) else ai_output
+            if not isinstance(raw, str):
+                raise ValueError("Unexpected tutor output type")
+            text = raw.strip()
+            fence = JSON_FENCE_PATTERN.fullmatch(text)
+            if fence:
+                text = fence.group(1)
+            generated = TutorGeneratedContent.model_validate(json.loads(text))
+    except (ValidationError, ValueError, TypeError):
+        raise StructuralValidationError(
+            "Tutor model must return an answer and three distinct follow-up questions together."
+        ) from None
 
     return TutorResponse(
         level=payload.level,
         explanation_language=payload.explanation_language,
         question_id=question_ctx.id,
-        reply=reply_text,
+        reply=generated.reply,
+        follow_up_questions=generated.follow_up_questions,
     )
 
 
@@ -930,4 +936,5 @@ async def run_tutor_chat(
         level=result.level,
         explanation_language=result.explanation_language,
         reply=result.reply,
+        follow_up_questions=result.follow_up_questions,
     )

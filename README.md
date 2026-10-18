@@ -191,3 +191,35 @@ curl -i -X POST "$BASE_URL/api/tutor" \
   }'
 ```
 
+
+## Atomic tutor answers and follow-up questions
+
+`POST /api/tutor` and `POST /api/tutor/chat` (including their aliases) now
+return `reply` and `follow_up_questions` together. The server asks the model
+for both in **one invocation**, validates the result, and returns a single
+JSON response. There is no separate suggestion-generation or repair call.
+
+```json
+{
+  "level": "N5",
+  "explanation_language": "English",
+  "reply": "The particle は marks the topic of a sentence.",
+  "follow_up_questions": [
+    "How is が different?",
+    "Can you give another example?",
+    "How do I make this sentence negative?"
+  ]
+}
+```
+
+The selected-item route also returns its existing `question_id` and
+`ai_generated` fields. Follow-ups are exactly three distinct, nonempty strings
+of at most 500 characters each, written in `explanation_language` and phrased
+as questions the learner can ask. The explanation is nonempty and at most
+20,000 characters; it can contain Markdown. An incomplete or malformed model
+result returns HTTP 502 with `Cache-Control: no-store`, without retrying the
+model. Existing request limits and ephemeral history handling are unchanged.
+
+Redeploy this backend before using the combined response in the Flutter app.
+The generated OpenAPI specification and `output/pdf/jlpt-practice-api-reference.pdf`
+describe the updated contract.

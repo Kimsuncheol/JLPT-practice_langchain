@@ -719,7 +719,7 @@ def test_absence_of_conversation_content_prompts_and_answers_in_logs(caplog) -> 
     assert res_eval.status_code == 200
 
     app.dependency_overrides[get_chat_model] = lambda: RunnableLambda(
-        lambda _: AIMessage(content="簡潔な説明です。")
+        lambda _: AIMessage(content=json.dumps({"reply": "簡潔な説明です。", "follow_up_questions": ["他の例は？", "使い方は？", "違いは？"]}))
     )
     res_tutor = client.post(
         "/api/tutor",
@@ -787,13 +787,11 @@ def test_tutor_endpoint_for_selected_practice_item_and_server_controlled_prompt(
     async def _fake_tutor_llm(prompt_value: Any) -> AIMessage:
         nonlocal captured_messages
         captured_messages = prompt_value.to_messages()
-        return AIMessage(
-            content=(
-                "「てから」와 「たあとで」 모두 선후 관계를 나타내지만, 「てから」는 앞 동작 직후에 "
-                "뒤 동작이 이어짐을 강조합니다. 구어에서는 둘 다 자연스러울 수 있습니다. "
-                "예: 手を洗ってから食べます。"
-            )
-        )
+        return AIMessage(content=json.dumps({
+            "reply": "「てから」는 앞 동작 직후에 뒤 동작이 이어짐을 강조합니다. 예: 手を洗ってから食べます。",
+            "follow_up_questions": ["다른 예문은 무엇인가요?", "たあとで와 어떻게 다른가요?", "언제 쓸 수 있나요?"],
+        }))
+
 
     app = create_app()
     app.dependency_overrides[get_chat_model] = lambda: RunnableLambda(_fake_tutor_llm)
@@ -1160,6 +1158,7 @@ def test_practice_and_tutor_responses_include_no_store_header() -> None:
     mock_tutor = TutorChatResponse(
         level=JLPTLevel.N5,
         reply="「は」is pronounced 'wa' when used as a topic particle.",
+        follow_up_questions=["What is another example?", "How is が different?", "When do I use it?"],
     )
     with patch(
         "app.routes.run_tutor_chat",
@@ -1204,3 +1203,58 @@ def test_configurable_ollama_model_and_base_url_defaults() -> None:
     assert custom_settings.ollama_base_url == "https://ollama.myhost.example"
     assert custom_settings.ollama_model == "llama3.1:8b"
 
+
+
+def test_tutor_answer_and_follow_ups_share_exactly_one_model_invocation() -> None:
+    """Both tutor routes return the same atomic generated content with one call."""
+    for path in ["/api/tutor", "/api/tutor/chat"]:
+        calls = []
+        generated = {
+            "reply": "は identifies the topic. わたしは学生です。",
+            "follow_up_questions": [
+                "How is が different?",
+                "Can you give another example?",
+                "How do I make this negative?",
+            ],
+        }
+
+        async def model(prompt_value):
+            calls.append(prompt_value.to_messages())
+            return AIMessage(content=json.dumps(generated, ensure_ascii=False))
+
+        app = create_app()
+        app.dependency_overrides[get_chat_model] = lambda: RunnableLambda(model)
+        response = TestClient(app).post(path, json={
+            "level": "N5", "explanation_language": "English",
+            "question": "わたしは学生です。", "message": "Explain this grammar.",
+        })
+        assert response.status_code == 200
+        assert response.json()["reply"] == generated["reply"]
+        assert response.json()["follow_up_questions"] == generated["follow_up_questions"]
+        assert len(calls) == 1
+        assert "single response" in calls[0][0].content
+        assert "follow_up_questions" in calls[0][0].content
+        assert response.headers["cache-control"] == "no-store"
+
+
+def test_incomplete_tutor_output_fails_without_a_second_model_call() -> None:
+    """Missing, duplicate or oversized questions cannot trigger hidden repair calls."""
+    for output in [
+        "Plain answer without suggestions",
+        {"reply": "Answer", "follow_up_questions": []},
+        {"reply": "Answer", "follow_up_questions": ["Why?", "Why?", "How?"]},
+        {"reply": "Answer", "follow_up_questions": ["Why?", "How?", "x" * 501]},
+        {"reply": " ", "follow_up_questions": ["Why?", "How?", "When?"]},
+    ]:
+        calls = []
+
+        async def model(_):
+            calls.append(1)
+            return AIMessage(content=output if isinstance(output, str) else json.dumps(output))
+
+        app = create_app()
+        app.dependency_overrides[get_chat_model] = lambda: RunnableLambda(model)
+        response = TestClient(app).post("/api/tutor/chat", json={"message": "Explain は."})
+        assert response.status_code == 502
+        assert len(calls) == 1
+        assert response.headers["cache-control"] == "no-store"

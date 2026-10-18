@@ -401,6 +401,12 @@ async def tutor_chat(
             detail=str(exc),
             headers={"Cache-Control": "no-store"},
         ) from None
+    except (UnsupportedStructuredOutputError, StructuralValidationError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+            headers={"Cache-Control": "no-store"},
+        ) from None
     except Exception as exc:
         if is_timeout_error(exc):
             raise HTTPException(

@@ -16,7 +16,7 @@ Distinguishes:
 import hashlib
 import re
 from enum import Enum
-from typing import Literal, Optional, Union
+from typing import Annotated, Literal, Optional, Union
 from pydantic import (
     AliasChoices,
     BaseModel,
@@ -748,13 +748,31 @@ class TutorRequest(BaseModel):
         return value
 
 
-class TutorResponse(BaseModel):
+class TutorGeneratedContent(BaseModel):
+    """Answer and learner-facing follow-ups produced together in one model call."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    reply: str = Field(..., min_length=1, max_length=20000)
+    follow_up_questions: list[Annotated[str, Field(min_length=1, max_length=500)]] = Field(
+        ..., min_length=3, max_length=3,
+        description="Three distinct learner questions generated with the answer, in explanation_language.",
+    )
+
+    @field_validator("follow_up_questions")
+    @classmethod
+    def distinct_follow_up_questions(cls, questions: list[str]) -> list[str]:
+        if len(set(questions)) != len(questions):
+            raise ValueError("Follow-up questions must be distinct.")
+        return questions
+
+
+class TutorResponse(TutorGeneratedContent):
     """Stateless tutor response for POST /api/tutor."""
 
     level: JLPTLevel
     explanation_language: ExplanationLanguage
     question_id: Optional[str] = None
-    reply: str
     ai_generated: Literal[True] = True
 
 
@@ -822,12 +840,11 @@ class TutorChatRequest(BaseModel):
         return _normalize_explanation_language_value(value)
 
 
-class TutorChatResponse(BaseModel):
+class TutorChatResponse(TutorGeneratedContent):
     """Stateless tutor reply."""
 
     level: JLPTLevel
     explanation_language: ExplanationLanguage = ExplanationLanguage.ENGLISH
-    reply: str
 
 
 class HealthResponse(BaseModel):

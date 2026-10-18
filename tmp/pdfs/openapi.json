@@ -1,1 +1,1616 @@
-{"openapi": "3.1.0", "info": {"title": "JLPT Practice & Tutor API", "description": "Stateless JLPT practice and tutor API powered by FastAPI, Pydantic, and langchain-ollama (ChatOllama) with strict privacy guarantees.", "version": "0.1.0"}, "paths": {"/health": {"get": {"tags": ["system"], "summary": "Health Check", "description": "Lightweight health check that never invokes Ollama or external network calls.", "operationId": "health_check_health_get", "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HealthResponse"}}}}}}}, "/api/practice/generate": {"post": {"tags": ["practice"], "summary": "Generate Practice Questions", "description": "Generate unofficial AI-labeled JLPT vocabulary, grammar, or reading questions in one batch call.", "operationId": "generate_practice_questions_api_practice_generate_post", "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/PracticeGenerateRequest"}}}, "required": true}, "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PracticeGenerateResponse"}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}}}, "/api/practice/question": {"post": {"tags": ["practice"], "summary": "Create Practice Question", "description": "Generate a single JLPT practice question with Cache-Control: no-store.", "operationId": "create_practice_question_api_practice_question_post", "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/PracticeQuestionRequest"}}}, "required": true}, "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PracticeQuestionResponse"}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}}}, "/practice/question": {"post": {"tags": ["practice"], "summary": "Create Practice Question", "description": "Generate a single JLPT practice question with Cache-Control: no-store.", "operationId": "create_practice_question_practice_question_post", "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/PracticeQuestionRequest"}}}, "required": true}, "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PracticeQuestionResponse"}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}}}, "/api/practice/evaluate": {"post": {"tags": ["practice"], "summary": "Evaluate Answer", "description": "Evaluate a submitted JLPT multiple-choice answer locally without calling Ollama.", "operationId": "evaluate_answer_api_practice_evaluate_post", "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/AnswerEvaluationRequest"}}}, "required": true}, "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AnswerEvaluationResponse"}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}}}, "/practice/evaluate": {"post": {"tags": ["practice"], "summary": "Evaluate Answer", "description": "Evaluate a submitted JLPT multiple-choice answer locally without calling Ollama.", "operationId": "evaluate_answer_practice_evaluate_post", "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/AnswerEvaluationRequest"}}}, "required": true}, "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/AnswerEvaluationResponse"}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}}}, "/api/tutor": {"post": {"tags": ["tutor"], "summary": "Tutor For Practice Item", "description": "Answer questions about the selected practice item using a bounded recent conversation window.", "operationId": "tutor_for_practice_item_api_tutor_post", "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/TutorRequest"}}}, "required": true}, "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TutorResponse"}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}}}, "/api/tutor/chat": {"post": {"tags": ["tutor"], "summary": "Tutor Chat", "description": "Stateless JLPT tutor endpoint. Context stays only in browser & request-local memory.", "operationId": "tutor_chat_api_tutor_chat_post", "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/TutorChatRequest"}}}, "required": true}, "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TutorChatResponse"}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}}}, "/tutor/chat": {"post": {"tags": ["tutor"], "summary": "Tutor Chat", "description": "Stateless JLPT tutor endpoint. Context stays only in browser & request-local memory.", "operationId": "tutor_chat_tutor_chat_post", "requestBody": {"content": {"application/json": {"schema": {"$ref": "#/components/schemas/TutorChatRequest"}}}, "required": true}, "responses": {"200": {"description": "Successful Response", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/TutorChatResponse"}}}}, "422": {"description": "Validation Error", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/HTTPValidationError"}}}}}}}}, "components": {"schemas": {"AlternativeExplanation": {"properties": {"option_index": {"type": "integer", "maximum": 3.0, "minimum": 0.0, "title": "Option Index"}, "option_text": {"type": "string", "title": "Option Text"}, "was_selected": {"type": "boolean", "title": "Was Selected", "default": false}, "why_it_does_not_fit": {"type": "string", "title": "Why It Does Not Fit"}}, "type": "object", "required": ["option_index", "option_text", "why_it_does_not_fit"], "title": "AlternativeExplanation", "description": "Explanation for why a distractor option does not fit."}, "AnswerEvaluationRequest": {"properties": {"level": {"$ref": "#/components/schemas/JLPTLevel", "default": "N5"}, "question": {"type": "string", "maxLength": 2000, "minLength": 1, "title": "Question"}, "selected_answer": {"type": "string", "maxLength": 500, "minLength": 1, "title": "Selected Answer"}, "correct_answer": {"anyOf": [{"type": "string", "maxLength": 500}, {"type": "null"}], "title": "Correct Answer"}, "options": {"anyOf": [{"items": {"type": "string"}, "type": "array", "maxItems": 4, "minItems": 4}, {"type": "null"}], "title": "Options"}, "correct_index": {"anyOf": [{"type": "integer", "maximum": 3.0, "minimum": 0.0}, {"type": "null"}], "title": "Correct Index"}, "option_explanations": {"anyOf": [{"items": {"type": "string"}, "type": "array", "maxItems": 4, "minItems": 4}, {"type": "null"}], "title": "Option Explanations"}, "supporting_sentence": {"anyOf": [{"type": "string", "maxLength": 350}, {"type": "null"}], "title": "Supporting Sentence"}}, "type": "object", "required": ["question", "selected_answer"], "title": "AnswerEvaluationRequest", "description": "Request payload for deterministic, non-LLM multiple-choice answer evaluation."}, "AnswerEvaluationResponse": {"properties": {"is_correct": {"type": "boolean", "title": "Is Correct"}, "selected_answer": {"type": "string", "title": "Selected Answer", "default": ""}, "correct_answer": {"type": "string", "title": "Correct Answer", "default": ""}, "supporting_sentence": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Supporting Sentence"}, "why_correct_fits": {"type": "string", "title": "Why Correct Fits", "default": ""}, "why_alternatives_do_not_fit": {"items": {"$ref": "#/components/schemas/AlternativeExplanation"}, "type": "array", "title": "Why Alternatives Do Not Fit"}, "feedback": {"type": "string", "title": "Feedback"}, "grammar_notes": {"items": {"type": "string"}, "type": "array", "title": "Grammar Notes"}, "self_study_mode": {"type": "boolean", "const": true, "title": "Self Study Mode", "default": true}, "tamper_proof": {"type": "boolean", "const": false, "title": "Tamper Proof", "default": false}, "official_score_predictive": {"type": "boolean", "const": false, "title": "Official Score Predictive", "default": false}, "difficulty_label": {"type": "string", "title": "Difficulty Label", "default": "Approximate JLPT difficulty (unofficial AI-generated estimate)"}, "scoring_notice": {"type": "string", "title": "Scoring Notice", "default": "Self-study mode: The answer key is held in browser memory and compared locally without calling the Ollama model or storing scores. Because a browser-held answer key is inspectable, this scoring is for self-study feedback only, is not tamper-proof, and does not predict an official JLPT score."}, "score_disclaimer": {"type": "string", "title": "Score Disclaimer", "default": "Unofficial AI practice with approximate difficulty: practice accuracy is for self-study only and does not predict or guarantee an official JLPT score."}}, "type": "object", "required": ["is_correct", "feedback"], "title": "AnswerEvaluationResponse", "description": "Local/deterministic feedback for a submitted multiple-choice answer (no LLM call)."}, "ChatMessage": {"properties": {"role": {"type": "string", "enum": ["user", "assistant"], "title": "Role", "description": "Speaker role ('user' or 'assistant' only; 'system' is forbidden)."}, "content": {"type": "string", "maxLength": 500, "minLength": 1, "title": "Content", "description": "Bounded message text content (1 to 500 characters)."}}, "additionalProperties": false, "type": "object", "required": ["role", "content"], "title": "ChatMessage", "description": "Single message in an ephemeral, browser-maintained conversation window.\n\nServer-side role validation strictly permits only 'user' and 'assistant'\n(rejecting 'system', 'developer', or 'tool' roles to prevent prompt injection)."}, "ExplanationLanguage": {"type": "string", "enum": ["English", "Korean", "Japanese"], "title": "ExplanationLanguage", "description": "Supported languages for option and tutor explanations."}, "GeneratedPracticeQuestion": {"properties": {"id": {"type": "string", "maxLength": 80, "minLength": 5, "title": "Id", "description": "Deterministic stable question identifier derived from content."}, "question_text": {"type": "string", "title": "Question Text", "description": "Japanese question prompt text."}, "options": {"items": {"type": "string"}, "type": "array", "maxItems": 4, "minItems": 4, "title": "Options", "description": "Four distinct answer choices."}, "correct_index": {"type": "integer", "maximum": 3.0, "minimum": 0.0, "title": "Correct Index", "description": "Zero-based index of the single correct option (0-3)."}, "correct_answer": {"type": "string", "title": "Correct Answer", "description": "The correct option string matching options[correct_index]."}, "option_explanations": {"items": {"type": "string"}, "type": "array", "maxItems": 4, "minItems": 4, "title": "Option Explanations", "description": "Explanation for each of the four options (indices 0-3)."}, "supporting_sentence": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Supporting Sentence", "description": "Exact supporting sentence from the reading passage (for reading questions)."}, "ai_generated": {"type": "boolean", "const": true, "title": "Ai Generated", "description": "Indicates this question is unofficial AI-generated practice material.", "default": true}, "difficulty_label": {"type": "string", "title": "Difficulty Label", "description": "Labels difficulty as an approximate estimate.", "default": "Approximate JLPT difficulty (unofficial AI-generated estimate)"}, "content_label": {"type": "string", "title": "Content Label", "description": "Human-readable label identifying the material as unofficial AI practice.", "default": "Unofficial AI-generated original JLPT practice material (not official exam items)"}}, "type": "object", "required": ["id", "question_text", "options", "correct_index", "correct_answer", "option_explanations"], "title": "GeneratedPracticeQuestion", "description": "Validated, AI-labeled JLPT practice question returned to the client."}, "GenerationCategory": {"type": "string", "enum": ["vocabulary", "grammar", "reading"], "title": "GenerationCategory", "description": "Supported categories for POST /api/practice/generate (vocabulary, grammar, reading)."}, "HTTPValidationError": {"properties": {"detail": {"items": {"$ref": "#/components/schemas/ValidationError"}, "type": "array", "title": "Detail"}}, "type": "object", "title": "HTTPValidationError"}, "HealthResponse": {"properties": {"status": {"type": "string", "const": "ok", "title": "Status", "default": "ok"}, "model": {"type": "string", "title": "Model"}, "base_url_configured": {"type": "boolean", "title": "Base Url Configured", "default": true}, "tracing_disabled": {"type": "boolean", "title": "Tracing Disabled"}, "persistence": {"type": "string", "const": "none", "title": "Persistence", "default": "none"}}, "type": "object", "required": ["model", "tracing_disabled"], "title": "HealthResponse", "description": "Health check response verifying service readiness without calling Ollama."}, "JLPTLevel": {"type": "string", "enum": ["N5", "N4", "N3", "N2", "N1"], "title": "JLPTLevel", "description": "Supported JLPT proficiency levels (N5 to N1)."}, "PracticeCategory": {"type": "string", "enum": ["vocabulary", "grammar", "kanji", "reading"], "title": "PracticeCategory", "description": "Supported JLPT practice categories across the app."}, "PracticeGenerateRequest": {"properties": {"level": {"$ref": "#/components/schemas/JLPTLevel", "description": "Target JLPT proficiency level (N5 through N1)."}, "category": {"$ref": "#/components/schemas/GenerationCategory", "description": "Practice category: 'vocabulary', 'grammar', or 'reading'."}, "question_count": {"type": "integer", "maximum": 5.0, "minimum": 1.0, "title": "Question Count", "description": "Number of questions to generate (1-5 for vocabulary/grammar; 1-3 for reading).", "default": 1}, "explanation_language": {"$ref": "#/components/schemas/ExplanationLanguage", "description": "Language for explanations: 'English', 'Korean', or 'Japanese'.", "default": "English"}}, "additionalProperties": false, "type": "object", "required": ["level", "category"], "title": "PracticeGenerateRequest", "description": "Bounded request payload for POST /api/practice/generate."}, "PracticeGenerateResponse": {"properties": {"level": {"$ref": "#/components/schemas/JLPTLevel"}, "category": {"$ref": "#/components/schemas/GenerationCategory"}, "question_count": {"type": "integer", "maximum": 5.0, "minimum": 1.0, "title": "Question Count"}, "explanation_language": {"$ref": "#/components/schemas/ExplanationLanguage"}, "passage": {"anyOf": [{"type": "string", "maxLength": 800}, {"type": "null"}], "title": "Passage", "description": "Short original Japanese passage when category is 'reading'."}, "ai_generated": {"type": "boolean", "const": true, "title": "Ai Generated", "default": true}, "unofficial_practice": {"type": "boolean", "const": true, "title": "Unofficial Practice", "default": true}, "difficulty_label": {"type": "string", "title": "Difficulty Label", "default": "Approximate JLPT difficulty (unofficial AI-generated estimate)"}, "content_label": {"type": "string", "title": "Content Label", "default": "Unofficial AI-generated original JLPT practice material (not official exam items)"}, "score_disclaimer": {"type": "string", "title": "Score Disclaimer", "default": "Unofficial AI practice with approximate difficulty: practice accuracy is for self-study only and does not predict or guarantee an official JLPT score."}, "self_study_notice": {"type": "string", "title": "Self Study Notice", "default": "Self-study mode: The answer key is held in browser memory and compared locally without calling the Ollama model or storing scores. Because a browser-held answer key is inspectable, this scoring is for self-study feedback only, is not tamper-proof, and does not predict an official JLPT score."}, "validation": {"$ref": "#/components/schemas/ValidationReport"}, "questions": {"items": {"$ref": "#/components/schemas/GeneratedPracticeQuestion"}, "type": "array", "maxItems": 5, "minItems": 1, "title": "Questions"}}, "type": "object", "required": ["level", "category", "question_count", "explanation_language", "questions"], "title": "PracticeGenerateResponse", "description": "Response schema for POST /api/practice/generate (vocabulary, grammar, and reading)."}, "PracticeQuestionRequest": {"properties": {"level": {"$ref": "#/components/schemas/JLPTLevel", "description": "Target JLPT level.", "default": "N5"}, "category": {"$ref": "#/components/schemas/PracticeCategory", "description": "Question skill category.", "default": "grammar"}, "topic": {"anyOf": [{"type": "string", "maxLength": 200}, {"type": "null"}], "title": "Topic", "description": "Optional focus topic (e.g., particles, te-form, daily life)."}}, "type": "object", "title": "PracticeQuestionRequest", "description": "Request payload for generating a single JLPT practice question."}, "PracticeQuestionResponse": {"properties": {"level": {"$ref": "#/components/schemas/JLPTLevel"}, "category": {"$ref": "#/components/schemas/PracticeCategory"}, "question": {"type": "string", "title": "Question", "description": "The JLPT multiple-choice question prompt."}, "options": {"items": {"type": "string"}, "type": "array", "maxItems": 4, "minItems": 4, "title": "Options", "description": "Four multiple-choice answer options."}, "correct_index": {"type": "integer", "maximum": 3.0, "minimum": 0.0, "title": "Correct Index", "description": "Zero-based index of the correct option (0-3)."}, "explanation": {"type": "string", "title": "Explanation", "description": "Explanation of why the correct option is right."}}, "type": "object", "required": ["level", "category", "question", "options", "correct_index", "explanation"], "title": "PracticeQuestionResponse", "description": "Structured single JLPT practice question returned by the AI service."}, "SelectedPracticeQuestionContext": {"properties": {"id": {"anyOf": [{"type": "string", "maxLength": 80}, {"type": "null"}], "title": "Id"}, "passage": {"anyOf": [{"type": "string", "maxLength": 800}, {"type": "null"}], "title": "Passage"}, "question_text": {"type": "string", "maxLength": 500, "minLength": 1, "title": "Question Text", "description": "Japanese text of the selected practice question."}, "options": {"items": {"type": "string"}, "type": "array", "maxItems": 4, "title": "Options", "description": "Up to 4 options for the selected question."}, "correct_index": {"anyOf": [{"type": "integer", "maximum": 3.0, "minimum": 0.0}, {"type": "null"}], "title": "Correct Index"}, "correct_answer": {"anyOf": [{"type": "string", "maxLength": 200}, {"type": "null"}], "title": "Correct Answer"}, "selected_answer": {"anyOf": [{"type": "string", "maxLength": 200}, {"type": "null"}], "title": "Selected Answer"}, "supporting_sentence": {"anyOf": [{"type": "string", "maxLength": 350}, {"type": "null"}], "title": "Supporting Sentence"}, "option_explanations": {"items": {"type": "string"}, "type": "array", "maxItems": 4, "title": "Option Explanations", "description": "Per-option explanations for the selected question."}}, "type": "object", "required": ["question_text"], "title": "SelectedPracticeQuestionContext", "description": "Bounded context for the single selected practice item sent to POST /api/tutor."}, "TutorChatRequest": {"properties": {"level": {"$ref": "#/components/schemas/JLPTLevel", "description": "Learner's JLPT level.", "default": "N5"}, "explanation_language": {"$ref": "#/components/schemas/ExplanationLanguage", "description": "Explanation language: English, Korean, or Japanese.", "default": "English"}, "question": {"anyOf": [{"$ref": "#/components/schemas/SelectedPracticeQuestionContext"}, {"type": "string"}, {"type": "null"}], "title": "Question"}, "message": {"type": "string", "maxLength": 500, "minLength": 1, "title": "Message", "description": "Current learner question."}, "history": {"items": {"$ref": "#/components/schemas/ChatMessage"}, "type": "array", "maxItems": 6, "title": "History", "description": "Bounded recent conversation window held only in browser and request-local memory."}}, "type": "object", "required": ["message"], "title": "TutorChatRequest", "description": "Stateless tutor request carrying ephemeral history from browser memory."}, "TutorChatResponse": {"properties": {"level": {"$ref": "#/components/schemas/JLPTLevel"}, "explanation_language": {"$ref": "#/components/schemas/ExplanationLanguage", "default": "English"}, "reply": {"type": "string", "title": "Reply"}}, "type": "object", "required": ["level", "reply"], "title": "TutorChatResponse", "description": "Stateless tutor reply."}, "TutorRequest": {"properties": {"level": {"$ref": "#/components/schemas/JLPTLevel", "description": "Target JLPT level (N5-N1).", "default": "N5"}, "explanation_language": {"$ref": "#/components/schemas/ExplanationLanguage", "description": "Explanation language: English, Korean, or Japanese.", "default": "English"}, "question": {"anyOf": [{"$ref": "#/components/schemas/SelectedPracticeQuestionContext"}, {"type": "string"}], "title": "Question", "description": "The single selected practice item (structured object or question text)."}, "message": {"type": "string", "maxLength": 500, "minLength": 1, "title": "Message", "description": "Learner's question about the selected practice item (1-500 chars)."}, "history": {"items": {"$ref": "#/components/schemas/ChatMessage"}, "type": "array", "maxItems": 6, "title": "History", "description": "Bounded recent conversation window from browser memory (max 6 messages)."}}, "additionalProperties": false, "type": "object", "required": ["question", "message"], "title": "TutorRequest", "description": "Bounded, stateless request for POST /api/tutor about the current practice item."}, "TutorResponse": {"properties": {"level": {"$ref": "#/components/schemas/JLPTLevel"}, "explanation_language": {"$ref": "#/components/schemas/ExplanationLanguage"}, "question_id": {"anyOf": [{"type": "string"}, {"type": "null"}], "title": "Question Id"}, "reply": {"type": "string", "title": "Reply"}, "ai_generated": {"type": "boolean", "const": true, "title": "Ai Generated", "default": true}}, "type": "object", "required": ["level", "explanation_language", "reply"], "title": "TutorResponse", "description": "Stateless tutor response for POST /api/tutor."}, "ValidationError": {"properties": {"loc": {"items": {"anyOf": [{"type": "string"}, {"type": "integer"}]}, "type": "array", "title": "Location"}, "msg": {"type": "string", "title": "Message"}, "type": {"type": "string", "title": "Error Type"}, "input": {"title": "Input"}, "ctx": {"type": "object", "title": "Context"}}, "type": "object", "required": ["loc", "msg", "type"], "title": "ValidationError"}, "ValidationReport": {"properties": {"structural_validation_passed": {"type": "boolean", "const": true, "title": "Structural Validation Passed", "default": true}, "linguistic_correctness_guaranteed": {"type": "boolean", "const": false, "title": "Linguistic Correctness Guaranteed", "default": false}, "official_score_predictive": {"type": "boolean", "const": false, "title": "Official Score Predictive", "default": false}, "notice": {"type": "string", "title": "Notice", "default": "Structural validation passed (schema, Japanese script presence, 4 distinct options, single valid answer index, and per-option explanations verified). Note: Structural validation does not guarantee linguistic nuance or pedagogical accuracy of AI-generated content."}}, "type": "object", "title": "ValidationReport", "description": "Explicit separation between structural validation and linguistic correctness."}}}}
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "JLPT Practice & Tutor API",
+    "description": "Stateless JLPT practice and tutor API powered by FastAPI, Pydantic, and langchain-ollama (ChatOllama) with strict privacy guarantees.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Health Check",
+        "description": "Lightweight health check that never invokes Ollama or external network calls.",
+        "operationId": "health_check_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/practice/generate": {
+      "post": {
+        "tags": [
+          "practice"
+        ],
+        "summary": "Generate Practice Questions",
+        "description": "Generate unofficial AI-labeled JLPT vocabulary, grammar, or reading questions in one batch call.",
+        "operationId": "generate_practice_questions_api_practice_generate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PracticeGenerateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeGenerateResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/practice/follow-up": {
+      "post": {
+        "tags": [
+          "practice"
+        ],
+        "summary": "Generate Follow Up Practice Question",
+        "description": "Generate one original follow-up question targeting the same learning point with Cache-Control: no-store.",
+        "operationId": "generate_follow_up_practice_question_api_practice_follow_up_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PracticeFollowUpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeFollowUpResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/practice/question": {
+      "post": {
+        "tags": [
+          "practice"
+        ],
+        "summary": "Create Practice Question",
+        "description": "Generate a single JLPT practice question with Cache-Control: no-store.",
+        "operationId": "create_practice_question_api_practice_question_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PracticeQuestionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeQuestionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/practice/question": {
+      "post": {
+        "tags": [
+          "practice"
+        ],
+        "summary": "Create Practice Question",
+        "description": "Generate a single JLPT practice question with Cache-Control: no-store.",
+        "operationId": "create_practice_question_practice_question_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PracticeQuestionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PracticeQuestionResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/practice/evaluate": {
+      "post": {
+        "tags": [
+          "practice"
+        ],
+        "summary": "Evaluate Answer",
+        "description": "Evaluate a submitted JLPT multiple-choice answer locally without calling Ollama.",
+        "operationId": "evaluate_answer_api_practice_evaluate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerEvaluationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnswerEvaluationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/practice/evaluate": {
+      "post": {
+        "tags": [
+          "practice"
+        ],
+        "summary": "Evaluate Answer",
+        "description": "Evaluate a submitted JLPT multiple-choice answer locally without calling Ollama.",
+        "operationId": "evaluate_answer_practice_evaluate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerEvaluationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnswerEvaluationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tutor": {
+      "post": {
+        "tags": [
+          "tutor"
+        ],
+        "summary": "Tutor For Practice Item",
+        "description": "Answer questions about the selected practice item using a bounded recent conversation window.",
+        "operationId": "tutor_for_practice_item_api_tutor_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TutorRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TutorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tutor/chat": {
+      "post": {
+        "tags": [
+          "tutor"
+        ],
+        "summary": "Tutor Chat",
+        "description": "Stateless JLPT tutor endpoint. Context stays only in browser & request-local memory.",
+        "operationId": "tutor_chat_api_tutor_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TutorChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TutorChatResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tutor/chat": {
+      "post": {
+        "tags": [
+          "tutor"
+        ],
+        "summary": "Tutor Chat",
+        "description": "Stateless JLPT tutor endpoint. Context stays only in browser & request-local memory.",
+        "operationId": "tutor_chat_tutor_chat_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TutorChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TutorChatResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AlternativeExplanation": {
+        "properties": {
+          "option_index": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 0.0,
+            "title": "Option Index"
+          },
+          "option_text": {
+            "type": "string",
+            "title": "Option Text"
+          },
+          "was_selected": {
+            "type": "boolean",
+            "title": "Was Selected",
+            "default": false
+          },
+          "why_it_does_not_fit": {
+            "type": "string",
+            "title": "Why It Does Not Fit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "option_index",
+          "option_text",
+          "why_it_does_not_fit"
+        ],
+        "title": "AlternativeExplanation",
+        "description": "Explanation for why a distractor option does not fit."
+      },
+      "AnswerEvaluationRequest": {
+        "properties": {
+          "level": {
+            "$ref": "#/components/schemas/JLPTLevel",
+            "default": "N5"
+          },
+          "question": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Question"
+          },
+          "selected_answer": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Selected Answer"
+          },
+          "correct_answer": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correct Answer"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 4,
+                "minItems": 4
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
+          },
+          "correct_index": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 3.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correct Index"
+          },
+          "option_explanations": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "maxItems": 4,
+                "minItems": 4
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Option Explanations"
+          },
+          "supporting_sentence": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 350
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supporting Sentence"
+          }
+        },
+        "type": "object",
+        "required": [
+          "question",
+          "selected_answer"
+        ],
+        "title": "AnswerEvaluationRequest",
+        "description": "Request payload for deterministic, non-LLM multiple-choice answer evaluation."
+      },
+      "AnswerEvaluationResponse": {
+        "properties": {
+          "is_correct": {
+            "type": "boolean",
+            "title": "Is Correct"
+          },
+          "selected_answer": {
+            "type": "string",
+            "title": "Selected Answer",
+            "default": ""
+          },
+          "correct_answer": {
+            "type": "string",
+            "title": "Correct Answer",
+            "default": ""
+          },
+          "supporting_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supporting Sentence"
+          },
+          "why_correct_fits": {
+            "type": "string",
+            "title": "Why Correct Fits",
+            "default": ""
+          },
+          "why_alternatives_do_not_fit": {
+            "items": {
+              "$ref": "#/components/schemas/AlternativeExplanation"
+            },
+            "type": "array",
+            "title": "Why Alternatives Do Not Fit"
+          },
+          "feedback": {
+            "type": "string",
+            "title": "Feedback"
+          },
+          "grammar_notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Grammar Notes"
+          },
+          "self_study_mode": {
+            "type": "boolean",
+            "const": true,
+            "title": "Self Study Mode",
+            "default": true
+          },
+          "tamper_proof": {
+            "type": "boolean",
+            "const": false,
+            "title": "Tamper Proof",
+            "default": false
+          },
+          "official_score_predictive": {
+            "type": "boolean",
+            "const": false,
+            "title": "Official Score Predictive",
+            "default": false
+          },
+          "difficulty_label": {
+            "type": "string",
+            "title": "Difficulty Label",
+            "default": "Approximate JLPT difficulty (unofficial AI-generated estimate)"
+          },
+          "scoring_notice": {
+            "type": "string",
+            "title": "Scoring Notice",
+            "default": "Self-study mode: The answer key is held in browser memory and compared locally without calling the Ollama model or storing scores. Because a browser-held answer key is inspectable, this scoring is for self-study feedback only, is not tamper-proof, and does not predict an official JLPT score."
+          },
+          "score_disclaimer": {
+            "type": "string",
+            "title": "Score Disclaimer",
+            "default": "Unofficial AI practice with approximate difficulty: practice accuracy is for self-study only and does not predict or guarantee an official JLPT score."
+          }
+        },
+        "type": "object",
+        "required": [
+          "is_correct",
+          "feedback"
+        ],
+        "title": "AnswerEvaluationResponse",
+        "description": "Local/deterministic feedback for a submitted multiple-choice answer (no LLM call)."
+      },
+      "ChatMessage": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "description": "Speaker role ('user' or 'assistant' only; 'system' is forbidden)."
+          },
+          "content": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Content",
+            "description": "Bounded message text content (1 to 500 characters)."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "ChatMessage",
+        "description": "Single message in an ephemeral, browser-maintained conversation window.\n\nServer-side role validation strictly permits only 'user' and 'assistant'\n(rejecting 'system', 'developer', or 'tool' roles to prevent prompt injection)."
+      },
+      "ExplanationLanguage": {
+        "type": "string",
+        "enum": [
+          "English",
+          "Korean",
+          "Japanese"
+        ],
+        "title": "ExplanationLanguage",
+        "description": "Supported languages for option and tutor explanations."
+      },
+      "FollowUpDifficulty": {
+        "type": "string",
+        "enum": [
+          "same",
+          "harder"
+        ],
+        "title": "FollowUpDifficulty",
+        "description": "Supported follow-up difficulty modes ('same' for 'Practice this again', 'harder' for 'Try a harder question')."
+      },
+      "GeneratedPracticeQuestion": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 5,
+            "title": "Id",
+            "description": "Deterministic stable question identifier derived from content."
+          },
+          "question_text": {
+            "type": "string",
+            "title": "Question Text",
+            "description": "Japanese question prompt text."
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Options",
+            "description": "Four distinct answer choices."
+          },
+          "correct_index": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 0.0,
+            "title": "Correct Index",
+            "description": "Zero-based index of the single correct option (0-3)."
+          },
+          "correct_answer": {
+            "type": "string",
+            "title": "Correct Answer",
+            "description": "The correct option string matching options[correct_index]."
+          },
+          "option_explanations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Option Explanations",
+            "description": "Explanation for each of the four options (indices 0-3)."
+          },
+          "supporting_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supporting Sentence",
+            "description": "Exact supporting sentence from the reading passage (for reading questions)."
+          },
+          "ai_generated": {
+            "type": "boolean",
+            "const": true,
+            "title": "Ai Generated",
+            "description": "Indicates this question is unofficial AI-generated practice material.",
+            "default": true
+          },
+          "difficulty_label": {
+            "type": "string",
+            "title": "Difficulty Label",
+            "description": "Labels difficulty as an approximate estimate.",
+            "default": "Approximate JLPT difficulty (unofficial AI-generated estimate)"
+          },
+          "content_label": {
+            "type": "string",
+            "title": "Content Label",
+            "description": "Human-readable label identifying the material as unofficial AI practice.",
+            "default": "Unofficial AI-generated original JLPT practice material (not official exam items)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "question_text",
+          "options",
+          "correct_index",
+          "correct_answer",
+          "option_explanations"
+        ],
+        "title": "GeneratedPracticeQuestion",
+        "description": "Validated, AI-labeled JLPT practice question returned to the client."
+      },
+      "GenerationCategory": {
+        "type": "string",
+        "enum": [
+          "vocabulary",
+          "grammar",
+          "reading"
+        ],
+        "title": "GenerationCategory",
+        "description": "Supported categories for POST /api/practice/generate (vocabulary, grammar, reading)."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "ok",
+            "title": "Status",
+            "default": "ok"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "base_url_configured": {
+            "type": "boolean",
+            "title": "Base Url Configured",
+            "default": true
+          },
+          "tracing_disabled": {
+            "type": "boolean",
+            "title": "Tracing Disabled"
+          },
+          "persistence": {
+            "type": "string",
+            "const": "none",
+            "title": "Persistence",
+            "default": "none"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "tracing_disabled"
+        ],
+        "title": "HealthResponse",
+        "description": "Health check response verifying service readiness without calling Ollama."
+      },
+      "JLPTLevel": {
+        "type": "string",
+        "enum": [
+          "N5",
+          "N4",
+          "N3",
+          "N2",
+          "N1"
+        ],
+        "title": "JLPTLevel",
+        "description": "Supported JLPT proficiency levels (N5 to N1)."
+      },
+      "PracticeCategory": {
+        "type": "string",
+        "enum": [
+          "vocabulary",
+          "grammar",
+          "kanji",
+          "reading"
+        ],
+        "title": "PracticeCategory",
+        "description": "Supported JLPT practice categories across the app."
+      },
+      "PracticeFollowUpRequest": {
+        "properties": {
+          "level": {
+            "$ref": "#/components/schemas/JLPTLevel",
+            "description": "Target JLPT proficiency level (N5 through N1).",
+            "default": "N5"
+          },
+          "category": {
+            "$ref": "#/components/schemas/GenerationCategory",
+            "description": "Practice category ('vocabulary', 'grammar', or 'reading').",
+            "default": "grammar"
+          },
+          "explanation_language": {
+            "$ref": "#/components/schemas/ExplanationLanguage",
+            "description": "Language for option explanations: 'English', 'Korean', or 'Japanese'.",
+            "default": "English"
+          },
+          "difficulty": {
+            "$ref": "#/components/schemas/FollowUpDifficulty",
+            "description": "Requested follow-up difficulty: 'same' ('Practice this again') or 'harder' ('Try a harder question').",
+            "default": "same"
+          },
+          "current_item": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelectedPracticeQuestionContext"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Current Item",
+            "description": "The current practice item being followed up on."
+          },
+          "selected_answer": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Answer",
+            "description": "Learner's selected answer for the current practice item."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "current_item"
+        ],
+        "title": "PracticeFollowUpRequest",
+        "description": "Bounded, stateless request for POST /api/practice/follow-up."
+      },
+      "PracticeFollowUpResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 5,
+            "title": "Id"
+          },
+          "level": {
+            "$ref": "#/components/schemas/JLPTLevel"
+          },
+          "category": {
+            "$ref": "#/components/schemas/GenerationCategory"
+          },
+          "difficulty": {
+            "$ref": "#/components/schemas/FollowUpDifficulty"
+          },
+          "explanation_language": {
+            "$ref": "#/components/schemas/ExplanationLanguage"
+          },
+          "previous_question_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Question Id"
+          },
+          "passage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 800
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passage"
+          },
+          "question_text": {
+            "type": "string",
+            "title": "Question Text"
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Options"
+          },
+          "correct_index": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 0.0,
+            "title": "Correct Index"
+          },
+          "correct_answer": {
+            "type": "string",
+            "title": "Correct Answer"
+          },
+          "option_explanations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Option Explanations"
+          },
+          "supporting_sentence": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supporting Sentence"
+          },
+          "question": {
+            "$ref": "#/components/schemas/GeneratedPracticeQuestion"
+          },
+          "ai_generated": {
+            "type": "boolean",
+            "const": true,
+            "title": "Ai Generated",
+            "default": true
+          },
+          "unofficial_practice": {
+            "type": "boolean",
+            "const": true,
+            "title": "Unofficial Practice",
+            "default": true
+          },
+          "difficulty_label": {
+            "type": "string",
+            "title": "Difficulty Label",
+            "default": "Approximate JLPT difficulty (unofficial AI-generated estimate)"
+          },
+          "content_label": {
+            "type": "string",
+            "title": "Content Label",
+            "default": "Unofficial AI-generated original JLPT practice material (not official exam items)"
+          },
+          "score_disclaimer": {
+            "type": "string",
+            "title": "Score Disclaimer",
+            "default": "Unofficial AI practice with approximate difficulty: practice accuracy is for self-study only and does not predict or guarantee an official JLPT score."
+          },
+          "self_study_notice": {
+            "type": "string",
+            "title": "Self Study Notice",
+            "default": "Self-study mode: The answer key is held in browser memory and compared locally without calling the Ollama model or storing scores. Because a browser-held answer key is inspectable, this scoring is for self-study feedback only, is not tamper-proof, and does not predict an official JLPT score."
+          },
+          "validation": {
+            "$ref": "#/components/schemas/ValidationReport"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "level",
+          "category",
+          "difficulty",
+          "explanation_language",
+          "question_text",
+          "options",
+          "correct_index",
+          "correct_answer",
+          "option_explanations",
+          "question"
+        ],
+        "title": "PracticeFollowUpResponse",
+        "description": "Validated response for POST /api/practice/follow-up."
+      },
+      "PracticeGenerateRequest": {
+        "properties": {
+          "level": {
+            "$ref": "#/components/schemas/JLPTLevel",
+            "description": "Target JLPT proficiency level (N5 through N1)."
+          },
+          "category": {
+            "$ref": "#/components/schemas/GenerationCategory",
+            "description": "Practice category: 'vocabulary', 'grammar', or 'reading'."
+          },
+          "question_count": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Question Count",
+            "description": "Number of questions to generate (1-5 for vocabulary/grammar; 1-3 for reading).",
+            "default": 1
+          },
+          "explanation_language": {
+            "$ref": "#/components/schemas/ExplanationLanguage",
+            "description": "Language for explanations: 'English', 'Korean', or 'Japanese'.",
+            "default": "English"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "level",
+          "category"
+        ],
+        "title": "PracticeGenerateRequest",
+        "description": "Bounded request payload for POST /api/practice/generate."
+      },
+      "PracticeGenerateResponse": {
+        "properties": {
+          "level": {
+            "$ref": "#/components/schemas/JLPTLevel"
+          },
+          "category": {
+            "$ref": "#/components/schemas/GenerationCategory"
+          },
+          "question_count": {
+            "type": "integer",
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Question Count"
+          },
+          "explanation_language": {
+            "$ref": "#/components/schemas/ExplanationLanguage"
+          },
+          "passage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 800
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passage",
+            "description": "Short original Japanese passage when category is 'reading'."
+          },
+          "ai_generated": {
+            "type": "boolean",
+            "const": true,
+            "title": "Ai Generated",
+            "default": true
+          },
+          "unofficial_practice": {
+            "type": "boolean",
+            "const": true,
+            "title": "Unofficial Practice",
+            "default": true
+          },
+          "difficulty_label": {
+            "type": "string",
+            "title": "Difficulty Label",
+            "default": "Approximate JLPT difficulty (unofficial AI-generated estimate)"
+          },
+          "content_label": {
+            "type": "string",
+            "title": "Content Label",
+            "default": "Unofficial AI-generated original JLPT practice material (not official exam items)"
+          },
+          "score_disclaimer": {
+            "type": "string",
+            "title": "Score Disclaimer",
+            "default": "Unofficial AI practice with approximate difficulty: practice accuracy is for self-study only and does not predict or guarantee an official JLPT score."
+          },
+          "self_study_notice": {
+            "type": "string",
+            "title": "Self Study Notice",
+            "default": "Self-study mode: The answer key is held in browser memory and compared locally without calling the Ollama model or storing scores. Because a browser-held answer key is inspectable, this scoring is for self-study feedback only, is not tamper-proof, and does not predict an official JLPT score."
+          },
+          "validation": {
+            "$ref": "#/components/schemas/ValidationReport"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/GeneratedPracticeQuestion"
+            },
+            "type": "array",
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Questions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "level",
+          "category",
+          "question_count",
+          "explanation_language",
+          "questions"
+        ],
+        "title": "PracticeGenerateResponse",
+        "description": "Response schema for POST /api/practice/generate (vocabulary, grammar, and reading)."
+      },
+      "PracticeQuestionRequest": {
+        "properties": {
+          "level": {
+            "$ref": "#/components/schemas/JLPTLevel",
+            "description": "Target JLPT level.",
+            "default": "N5"
+          },
+          "category": {
+            "$ref": "#/components/schemas/PracticeCategory",
+            "description": "Question skill category.",
+            "default": "grammar"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic",
+            "description": "Optional focus topic (e.g., particles, te-form, daily life)."
+          }
+        },
+        "type": "object",
+        "title": "PracticeQuestionRequest",
+        "description": "Request payload for generating a single JLPT practice question."
+      },
+      "PracticeQuestionResponse": {
+        "properties": {
+          "level": {
+            "$ref": "#/components/schemas/JLPTLevel"
+          },
+          "category": {
+            "$ref": "#/components/schemas/PracticeCategory"
+          },
+          "question": {
+            "type": "string",
+            "title": "Question",
+            "description": "The JLPT multiple-choice question prompt."
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "minItems": 4,
+            "title": "Options",
+            "description": "Four multiple-choice answer options."
+          },
+          "correct_index": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 0.0,
+            "title": "Correct Index",
+            "description": "Zero-based index of the correct option (0-3)."
+          },
+          "explanation": {
+            "type": "string",
+            "title": "Explanation",
+            "description": "Explanation of why the correct option is right."
+          }
+        },
+        "type": "object",
+        "required": [
+          "level",
+          "category",
+          "question",
+          "options",
+          "correct_index",
+          "explanation"
+        ],
+        "title": "PracticeQuestionResponse",
+        "description": "Structured single JLPT practice question returned by the AI service."
+      },
+      "SelectedPracticeQuestionContext": {
+        "properties": {
+          "id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "passage": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 800
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Passage"
+          },
+          "question_text": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Question Text",
+            "description": "Japanese text of the selected practice question."
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Options",
+            "description": "Up to 4 options for the selected question."
+          },
+          "correct_index": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 3.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correct Index"
+          },
+          "correct_answer": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correct Answer"
+          },
+          "selected_answer": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Answer"
+          },
+          "supporting_sentence": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 350
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supporting Sentence"
+          },
+          "option_explanations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Option Explanations",
+            "description": "Per-option explanations for the selected question."
+          }
+        },
+        "type": "object",
+        "required": [
+          "question_text"
+        ],
+        "title": "SelectedPracticeQuestionContext",
+        "description": "Bounded context for the single selected practice item sent to POST /api/tutor."
+      },
+      "TutorChatRequest": {
+        "properties": {
+          "level": {
+            "$ref": "#/components/schemas/JLPTLevel",
+            "description": "Learner's JLPT level.",
+            "default": "N5"
+          },
+          "explanation_language": {
+            "$ref": "#/components/schemas/ExplanationLanguage",
+            "description": "Explanation language: English, Korean, or Japanese.",
+            "default": "English"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelectedPracticeQuestionContext"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question"
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Message",
+            "description": "Current learner question."
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            },
+            "type": "array",
+            "maxItems": 6,
+            "title": "History",
+            "description": "Bounded recent conversation window held only in browser and request-local memory."
+          }
+        },
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "title": "TutorChatRequest",
+        "description": "Stateless tutor request carrying ephemeral history from browser memory."
+      },
+      "TutorChatResponse": {
+        "properties": {
+          "reply": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Reply"
+          },
+          "follow_up_questions": {
+            "items": {
+              "type": "string",
+              "maxLength": 500,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Follow Up Questions",
+            "description": "Three distinct learner questions generated with the answer, in explanation_language."
+          },
+          "level": {
+            "$ref": "#/components/schemas/JLPTLevel"
+          },
+          "explanation_language": {
+            "$ref": "#/components/schemas/ExplanationLanguage",
+            "default": "English"
+          }
+        },
+        "type": "object",
+        "required": [
+          "reply",
+          "follow_up_questions",
+          "level"
+        ],
+        "title": "TutorChatResponse",
+        "description": "Stateless tutor reply."
+      },
+      "TutorRequest": {
+        "properties": {
+          "level": {
+            "$ref": "#/components/schemas/JLPTLevel",
+            "description": "Target JLPT level (N5-N1).",
+            "default": "N5"
+          },
+          "explanation_language": {
+            "$ref": "#/components/schemas/ExplanationLanguage",
+            "description": "Explanation language: English, Korean, or Japanese.",
+            "default": "English"
+          },
+          "question": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SelectedPracticeQuestionContext"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Question",
+            "description": "The single selected practice item (structured object or question text)."
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Message",
+            "description": "Learner's question about the selected practice item (1-500 chars)."
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            },
+            "type": "array",
+            "maxItems": 6,
+            "title": "History",
+            "description": "Bounded recent conversation window from browser memory (max 6 messages)."
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "question",
+          "message"
+        ],
+        "title": "TutorRequest",
+        "description": "Bounded, stateless request for POST /api/tutor about the current practice item."
+      },
+      "TutorResponse": {
+        "properties": {
+          "reply": {
+            "type": "string",
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Reply"
+          },
+          "follow_up_questions": {
+            "items": {
+              "type": "string",
+              "maxLength": 500,
+              "minLength": 1
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 3,
+            "title": "Follow Up Questions",
+            "description": "Three distinct learner questions generated with the answer, in explanation_language."
+          },
+          "level": {
+            "$ref": "#/components/schemas/JLPTLevel"
+          },
+          "explanation_language": {
+            "$ref": "#/components/schemas/ExplanationLanguage"
+          },
+          "question_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Question Id"
+          },
+          "ai_generated": {
+            "type": "boolean",
+            "const": true,
+            "title": "Ai Generated",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "reply",
+          "follow_up_questions",
+          "level",
+          "explanation_language"
+        ],
+        "title": "TutorResponse",
+        "description": "Stateless tutor response for POST /api/tutor."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "ValidationReport": {
+        "properties": {
+          "structural_validation_passed": {
+            "type": "boolean",
+            "const": true,
+            "title": "Structural Validation Passed",
+            "default": true
+          },
+          "linguistic_correctness_guaranteed": {
+            "type": "boolean",
+            "const": false,
+            "title": "Linguistic Correctness Guaranteed",
+            "default": false
+          },
+          "official_score_predictive": {
+            "type": "boolean",
+            "const": false,
+            "title": "Official Score Predictive",
+            "default": false
+          },
+          "notice": {
+            "type": "string",
+            "title": "Notice",
+            "default": "Structural validation passed (schema, Japanese script presence, 4 distinct options, single valid answer index, and per-option explanations verified). Note: Structural validation does not guarantee linguistic nuance or pedagogical accuracy of AI-generated content."
+          }
+        },
+        "type": "object",
+        "title": "ValidationReport",
+        "description": "Explicit separation between structural validation and linguistic correctness."
+      }
+    }
+  }
+}
